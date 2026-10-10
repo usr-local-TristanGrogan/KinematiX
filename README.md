@@ -1,6 +1,16 @@
 # Audit
 
-Hackathon project. Work is split across branches by subsystem:
+Hackathon project: a robot arm with an oscilloscope probe moves to chosen pins
+of a microcontroller to measure and decode their signals. A phone photo is used
+to label every pin so the user can pick which ones to probe.
+
+```bash
+python run.py        # Windows: py run.py   - then scan the QR code with the phone
+```
+
+**How the website, phone pairing and pin detection work: [HOW_IT_WORKS.md](HOW_IT_WORKS.md)**
+
+Work is split across branches by subsystem:
 
 | Branch | Contents |
 | --- | --- |

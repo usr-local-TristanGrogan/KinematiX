@@ -10,11 +10,7 @@
   <header class="topbar">
     <div class="brand">PIN&nbsp;FINDER <span class="sep">//</span> <span id="board-name">METRO M4 GRAND CENTRAL</span></div>
     <div class="indicators">
-      <div class="ind"><span class="dot" id="cam-dot"></span><span class="k">CAM</span><span id="cam-state">OFFLINE</span></div>
-      <div class="ind" title="Live sharpness relative to the sharpest frame in the last 8 s. Wait for green before capturing.">
-        <span class="k">FOCUS</span><span class="meter"><span id="focus-bar"></span></span><span id="focus-val">—</span>
-      </div>
-      <div class="ind opt"><span class="k">MODE</span><span id="mode">LIVE</span></div>
+      <div class="ind"><span class="dot" id="phone-dot"></span><span class="k">PHONE</span><span id="phone-state">WAITING</span></div>
       <div class="ind opt"><span class="k">RES</span><span id="res">—</span></div>
       <div class="ind opt"><span class="k">DETECT</span><span id="detect-ms">—</span></div>
       <div class="ind"><span class="k">PINS</span><span id="pin-count">—</span></div>
@@ -24,31 +20,37 @@
   <main class="layout">
     <section class="viewport" id="viewport">
       <div class="stage" id="stage">
-        <video id="video" autoplay playsinline muted></video>
         <canvas id="canvas" hidden></canvas>
       </div>
       <div class="empty" id="empty">
-        <div class="empty-title">NO CAMERA</div>
-        <div class="empty-sub">Connect your phone as a webcam, then press REFRESH.<br>Or upload a photo.</div>
+        <div class="empty-title">NO IMAGE YET</div>
+        <div class="empty-sub">Scan the QR code with your phone and take a photo.<br>Or upload a photo.</div>
       </div>
       <div class="tooltip" id="tooltip" hidden></div>
       <div class="viewbar">
-        <span id="view-hint">SPACE CAPTURE · L LIVE · SCROLL ZOOM · DRAG PAN · 0 RESET</span>
+        <span id="view-hint">SPACE REQUEST PHOTO · SCROLL ZOOM · DRAG PAN · 0 RESET</span>
         <span id="zoom-level">100%</span>
       </div>
     </section>
 
     <aside class="panel">
       <div class="group">
-        <div class="group-title">CAMERA</div>
-        <div class="row">
-          <select id="camera-select"></select>
-          <button id="refresh-btn" class="btn" title="Re-scan cameras">REFRESH</button>
-        </div>
+        <div class="group-title">PHONE</div>
+        <div class="phone-status" id="phone-status">Scan with the phone's Camera app to connect.</div>
+        <img id="phone-qr" class="qr" alt="QR code for the phone" hidden>
+        <select id="phone-net" title="Network the phone is on" hidden></select>
+        <div class="phone-url" id="phone-url">Loading…</div>
         <div class="row buttons">
-          <button id="capture-btn" class="btn primary">CAPTURE</button>
-          <button id="live-btn" class="btn">LIVE</button>
-          <label class="btn" for="upload">UPLOAD</label>
+          <button id="phone-request" class="btn primary" disabled title="Prompt the phone to take a photo">REQUEST PHOTO</button>
+          <button id="phone-show-qr" class="btn" hidden>QR</button>
+          <button id="phone-refresh" class="btn" title="Re-scan networks (e.g. after turning on the hotspot)">REFRESH</button>
+        </div>
+      </div>
+
+      <div class="group">
+        <div class="group-title">FILE</div>
+        <div class="row buttons">
+          <label class="btn" for="upload">UPLOAD PHOTO</label>
           <input type="file" id="upload" accept="image/*,.heic,.heif" hidden>
         </div>
       </div>

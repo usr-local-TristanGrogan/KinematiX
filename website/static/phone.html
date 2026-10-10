@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="theme-color" content="#0d0f11">
+  <title>Pin Finder · Phone</title>
+  <link rel="stylesheet" href="phone.css">
+</head>
+<body>
+  <header class="bar">
+    <span class="brand">PIN&nbsp;FINDER</span>
+    <span class="link"><span class="dot" id="dot"></span><span id="link-state">CONNECTING</span></span>
+  </header>
+
+  <main>
+    <div class="request" id="request" hidden>LAPTOP REQUESTED A PHOTO</div>
+
+    <label class="shoot" id="shoot" for="file">
+      <span class="shoot-icon"></span>
+      <span class="shoot-label">TAKE PHOTO</span>
+      <span class="shoot-sub">Hold 20–30 cm above the board · tap the board to focus</span>
+    </label>
+    <input type="file" id="file" accept="image/*" capture="environment" hidden>
+
+    <section class="result" id="result" hidden>
+      <div class="result-head">
+        <span id="result-title">—</span>
+        <span class="muted" id="result-sub"></span>
+      </div>
+      <div class="progress" id="progress" hidden><span id="progress-bar"></span></div>
+      <canvas id="preview"></canvas>
+    </section>
+
+    <div class="error" id="error" hidden></div>
+  </main>
+
+  <footer class="foot" id="foot">Photos are sent to the laptop for pin detection.</footer>
+  <script src="phone.js"></script>
+</body>
+</html>

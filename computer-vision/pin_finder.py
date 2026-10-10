@@ -182,8 +182,31 @@ def board_rect(mask: np.ndarray, gold: np.ndarray):
     return np.float32([tl, tr, br, bl])
 
 
-def find_board_candidates(img: np.ndarray, mask_hsv) -> list:
-    """Candidate board corner sets, from the fixed colour range and the adaptive colour mask."""
+def pad_rect_candidates(img: np.ndarray, gold: np.ndarray, txy: np.ndarray) -> list:
+    """Board corners extrapolated from the rectangle around the pad cluster.
+
+    Works when the board colour is too dim or washed out to segment, since the
+    headers sit along the board edges. Returns both 180-degree interpretations.
+    """
+    hull = pad_cluster_hull(img, gold)
+    if hull is None or len(hull) < 4:
+        return []
+    box = cv2.boxPoints(cv2.minAreaRect(hull))
+    s, d = box.sum(1), np.diff(box, axis=1).ravel()
+    tl, br, tr, bl = box[np.argmin(s)], box[np.argmax(s)], box[np.argmin(d)], box[np.argmax(d)]
+    rect = np.float32([bl, tl, tr, br] if np.linalg.norm(tr - tl) < np.linalg.norm(bl - tl) else [tl, tr, br, bl])
+    (x0, y0), (x1, y1) = txy.min(0), txy.max(0)
+    pads_ref = np.float32([[x0, y0], [x1, y0], [x1, y1], [x0, y1]])
+    board_ref = np.float32([[0, 0], [REF_W, 0], [REF_W, REF_H], [0, REF_H]])
+    cands = []
+    for rot in (0, 2):
+        H = cv2.getPerspectiveTransform(pads_ref, np.roll(rect, -rot, axis=0))
+        cands.append(np.roll(cv2.perspectiveTransform(board_ref[None], H)[0], rot, axis=0))
+    return cands
+
+
+def find_board_candidates(img: np.ndarray, mask_hsv, txy: np.ndarray | None = None) -> list:
+    """Candidate board corner sets: fixed colour range, adaptive colour mask, pad-cluster rectangle."""
     hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
     gold = gold_mask(hsv)
     masks = [cv2.inRange(hsv, *mask_hsv)]
@@ -191,6 +214,8 @@ def find_board_candidates(img: np.ndarray, mask_hsv) -> list:
     if adaptive is not None:
         masks.append(adaptive)
     cands = [r for r in (board_rect(m, gold) for m in masks) if r is not None]
+    if txy is not None:
+        cands += pad_rect_candidates(img, gold, txy)
     if not cands:
         raise RuntimeError("No board found - move the phone closer or improve lighting.")
     return cands
@@ -278,7 +303,7 @@ def find_pins(img: np.ndarray, board: str = "metro_grand_central"):
     # Every board outline candidate x both 180-degree orientations; keep the
     # fit that lands on the most pads.
     best = None
-    for corners in find_board_candidates(img, prof["mask_hsv"]):
+    for corners in find_board_candidates(img, prof["mask_hsv"], txy):
         for rot in (0, 2):
             H = cv2.getPerspectiveTransform(np.roll(corners, -rot, axis=0), dst)
             warp = cv2.warpPerspective(img, H, (REF_W, REF_H))

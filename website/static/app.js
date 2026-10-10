@@ -7,17 +7,13 @@ const HEADER_COLORS = {
 };
 // Labels for these columns point away from their sibling column instead of the board centre.
 const SIBLINGS = { double_row_even: "double_row_odd", double_row_odd: "double_row_even" };
-const PHONE_HINT = /iphone|ipad|continuity|camo|android|droidcam|iriun|epoccam|phone/i;
-
 const $ = (id) => document.getElementById(id);
-const video = $("video"), canvas = $("canvas"), ctx = canvas.getContext("2d");
+const canvas = $("canvas"), ctx = canvas.getContext("2d");
 const viewport = $("viewport"), stage = $("stage");
 
 const state = {
-  stream: null,
-  mode: "live",          // "live" | "frozen"
-  image: null,           // ImageBitmap/HTMLImageElement of the frozen frame
-  result: null,          // /api/detect response
+  image: null,           // ImageBitmap/HTMLImageElement of the analysed photo
+  result: null,          // detection response
   selected: new Set(),   // indices of highlighted pins
   hover: -1,
   view: { s: 1, x: 0, y: 0 },
@@ -31,187 +27,131 @@ function log(msg, isError = false) {
   $("log").parentElement.classList.toggle("error", isError);
 }
 
-function setMode(mode) {
-  state.mode = mode;
-  $("mode").textContent = mode === "live" ? "LIVE" : "FROZEN";
-  video.hidden = mode !== "live";
-  canvas.hidden = mode !== "frozen";
-  $("empty").hidden = mode === "frozen" || !!state.stream;
+function showCanvas(on) {
+  canvas.hidden = !on;
+  $("empty").hidden = on;
 }
 
-// ---------------------------------------------------------------- camera
-
-async function listCameras() {
-  if (!navigator.mediaDevices?.getUserMedia) {
-    log("Camera API unavailable - open the site via http://localhost:8000", true);
-    return;
-  }
-  try {
-    // Device labels are only exposed after permission has been granted once.
-    const tmp = await navigator.mediaDevices.getUserMedia({ video: true });
-    tmp.getTracks().forEach((t) => t.stop());
-  } catch (e) {
-    log(`Camera permission denied or no camera: ${e.message}`, true);
-  }
-  const devices = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === "videoinput");
-  const sel = $("camera-select");
-  const prev = sel.value;
-  sel.innerHTML = "";
-  devices.forEach((d, i) => {
-    const o = document.createElement("option");
-    o.value = d.deviceId;
-    o.textContent = d.label || `Camera ${i + 1}`;
-    sel.appendChild(o);
-  });
-  if (!devices.length) {
-    stopCamera();
-    log("No cameras found. Connect the phone as a webcam and press REFRESH.", true);
-    return;
-  }
-  const phone = devices.find((d) => PHONE_HINT.test(d.label));
-  sel.value = devices.some((d) => d.deviceId === prev) ? prev : (phone || devices[0]).deviceId;
-  await startCamera(sel.value);
-}
-
-async function startCamera(deviceId) {
-  stopCamera();
-  try {
-    state.stream = await navigator.mediaDevices.getUserMedia({
-      video: { deviceId: { exact: deviceId }, width: { ideal: 3840 }, height: { ideal: 2160 } },
-      audio: false,
-    });
-  } catch (e) {
-    log(`Could not open camera: ${e.message}`, true);
-    return;
-  }
-  video.srcObject = state.stream;
-  await video.play().catch(() => {});
-  const label = $("camera-select").selectedOptions[0]?.textContent || "camera";
-  $("cam-dot").classList.add("on");
-  $("cam-state").textContent = label.toUpperCase().slice(0, 28);
-  video.onloadedmetadata = () => { $("res").textContent = `${video.videoWidth}×${video.videoHeight}`; };
-  if (state.mode === "live") setMode("live");
-  log(`Streaming from ${label}`);
-}
-
-function stopCamera() {
-  state.stream?.getTracks().forEach((t) => t.stop());
-  state.stream = null;
-  $("cam-dot").classList.remove("on");
-  $("cam-state").textContent = "OFFLINE";
-}
-
-// ---------------------------------------------------------------- focus
-
-const probe = document.createElement("canvas");
-const probeCtx = probe.getContext("2d", { willReadFrequently: true });
-
-// Variance of the Laplacian over the central region of a source, on a downscaled copy.
-// Higher = sharper. Only meaningful relative to other frames of the same scene.
-function sharpness(source, srcW, srcH) {
-  const w = 480, h = Math.round((480 * srcH) / srcW);
-  probe.width = w; probe.height = h;
-  probeCtx.drawImage(source, 0, 0, w, h);
-  const x0 = Math.round(w * 0.2), y0 = Math.round(h * 0.2), cw = Math.round(w * 0.6), ch = Math.round(h * 0.6);
-  const d = probeCtx.getImageData(x0, y0, cw, ch).data;
-  const g = new Float32Array(cw * ch);
-  for (let i = 0, j = 0; j < g.length; i += 4, j++) g[j] = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
-  let sum = 0, sum2 = 0, n = 0;
-  for (let y = 1; y < ch - 1; y++) {
-    for (let x = 1; x < cw - 1; x++) {
-      const k = y * cw + x;
-      const lap = g[k - 1] + g[k + 1] + g[k - cw] + g[k + cw] - 4 * g[k];
-      sum += lap; sum2 += lap * lap; n++;
-    }
-  }
-  const mean = sum / n;
-  return sum2 / n - mean * mean;
-}
-
-const focus = { history: [] };
-const FOCUS_GOOD = 1500, FOCUS_MIN = 500;
-function updateFocusMeter() {
-  if (state.mode === "live" && state.stream && video.videoWidth) {
-    const s = sharpness(video, video.videoWidth, video.videoHeight);
-    const now = performance.now();
-    focus.history.push([now, s]);
-    focus.history = focus.history.filter(([t]) => now - t < 8000);
-    const best = Math.max(...focus.history.map(([, v]) => v));
-    const ratio = best > 0 ? s / best : 0;
-    // Absolute floors: a blank or blurry scene can be "as sharp as recently seen" but still useless.
-    // Measured: in-focus board ~6000, out-of-focus ~15-350.
-    const level = ratio > 0.8 && s > FOCUS_GOOD ? "good" : ratio > 0.5 && s > FOCUS_MIN ? "mid" : "bad";
-    $("focus-bar").style.width = `${Math.round(Math.min(1, ratio) * 100)}%`;
-    $("focus-bar").className = level;
-    $("focus-val").textContent = Math.round(s).toString().padStart(4, " ");
-  }
-  setTimeout(updateFocusMeter, 250);
-}
-
-// ---------------------------------------------------------------- capture + detect
-
-const BURST_FRAMES = 12;
-
-async function capture() {
-  if (!state.stream || !video.videoWidth) { log("No live camera to capture from.", true); return; }
-  log("Capturing - hold still…");
-  const w = video.videoWidth, h = video.videoHeight;
-  let best = null, bestScore = -1;
-  for (let i = 0; i < BURST_FRAMES; i++) {
-    const frame = document.createElement("canvas");
-    frame.width = w; frame.height = h;
-    frame.getContext("2d").drawImage(video, 0, 0);
-    const score = sharpness(frame, w, h);
-    if (score > bestScore) { best = frame; bestScore = score; }
-    await new Promise((r) => setTimeout(r, 60));
-  }
-  const bitmap = await createImageBitmap(best);
-  const blob = await new Promise((r) => best.toBlob(r, "image/jpeg", 0.95));
-  await detect(blob, bitmap, "snapshot.jpg");
-}
+// ---------------------------------------------------------------- upload
 
 async function upload(file) {
-  // Browsers can't decode HEIC, so let the server return the image it analysed.
-  await detect(file, null, file.name);
-}
-
-async function detect(blob, bitmap, name) {
-  const btn = $("capture-btn");
-  btn.disabled = true;
   log("Running detection…");
   const form = new FormData();
-  form.append("image", blob, name);
+  form.append("image", file, file.name);
   try {
-    const res = await fetch(`/api/detect?return_image=${bitmap ? 0 : 1}`, { method: "POST", body: form });
+    // Browsers can't decode HEIC, so the server returns the image it analysed.
+    const res = await fetch("/api/detect?return_image=1", { method: "POST", body: form });
     const data = await res.json();
     if (!res.ok) throw new Error(data.detail || res.statusText);
-    if (!bitmap) {
-      const img = new Image();
-      img.src = `data:image/jpeg;base64,${data.image_jpeg}`;
-      await img.decode();
-      bitmap = img;
-    }
-    state.image = bitmap;
-    state.result = data;
-    state.selected.clear();
-    canvas.width = data.width;
-    canvas.height = data.height;
-    setMode("frozen");
-    resetView();
-    renderTable();
-    draw();
-    const det = data.pins.filter((p) => p.detected).length;
-    $("detect-ms").textContent = `${data.detect_ms} MS`;
-    $("pin-count").textContent = `${det}/${data.pins.length}`;
-    $("res").textContent = `${data.width}×${data.height}`;
-    log(`Detected ${data.pins.length} pins (${det} matched to pads, ${data.pins.length - det} inferred) in ${data.detect_ms} ms`);
+    showResult(data, await loadImage(`data:image/jpeg;base64,${data.image_jpeg}`), "UPLOAD · ");
   } catch (e) {
     log(`Detection failed: ${e.message}`, true);
-  } finally {
-    btn.disabled = false;
   }
 }
 
+async function loadImage(src) {
+  const img = new Image();
+  img.src = src;
+  await img.decode();
+  return img;
+}
+
+function showResult(data, image, source) {
+  state.image = image;
+  state.result = data;
+  state.selected.clear();
+  canvas.width = data.width;
+  canvas.height = data.height;
+  showCanvas(true);
+  resetView();
+  renderTable();
+  draw();
+  const det = data.pins.filter((p) => p.detected).length;
+  $("detect-ms").textContent = `${data.detect_ms} MS`;
+  $("pin-count").textContent = `${det}/${data.pins.length}`;
+  $("res").textContent = `${data.width}×${data.height}`;
+  log(`${source}Detected ${data.pins.length} pins (${det} matched to pads, ${data.pins.length - det} inferred) in ${data.detect_ms} ms`);
+}
+
+// ---------------------------------------------------------------- phone link
+
+const phone = { ws: null, connected: false, retryMs: 500, urls: [] };
+
+async function loadSession() {
+  try {
+    const res = await fetch("/api/session", { cache: "no-store" });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || res.statusText);
+    phone.urls = data.urls;
+    const sel = $("phone-net");
+    sel.innerHTML = "";
+    data.urls.forEach((u) => {
+      const o = document.createElement("option");
+      o.value = u.ip;
+      o.textContent = `${u.ip}${u.hotspot ? "  (iPhone hotspot)" : ""}`;
+      sel.appendChild(o);
+    });
+    sel.hidden = data.urls.length < 2;
+    showQr();
+  } catch (e) {
+    $("phone-url").textContent = e.message;
+  }
+}
+
+function showQr() {
+  const u = phone.urls.find((x) => x.ip === $("phone-net").value) || phone.urls[0];
+  if (!u) {
+    $("phone-qr").hidden = true;
+    $("phone-url").textContent = "No network. Turn on the phone's Personal Hotspot, connect it by USB, then press REFRESH.";
+    return;
+  }
+  $("phone-qr").src = `/api/qr.svg?ip=${encodeURIComponent(u.ip)}&t=${Date.now()}`;
+  $("phone-qr").hidden = phone.connected;
+  $("phone-url").textContent = u.url;
+}
+
+function setPhoneStatus(connected, devices = []) {
+  const changed = connected !== phone.connected;
+  phone.connected = connected;
+  $("phone-dot").classList.toggle("on", connected);
+  $("phone-state").textContent = connected ? "CONNECTED" : "WAITING";
+  $("phone-status").textContent = connected
+    ? `Phone connected${devices.length > 1 ? ` (${devices.length})` : ""}. Take a photo on the phone, or press REQUEST PHOTO.`
+    : "Scan with the phone's Camera app to connect.";
+  $("phone-request").disabled = !connected;
+  $("phone-qr").hidden = connected || !phone.urls.length;
+  $("phone-show-qr").hidden = !connected;
+  if (changed) log(connected ? "Phone connected." : "Phone disconnected - it will reconnect automatically when the page is reopened.");
+}
+
+function connectPhoneLink() {
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  const ws = new WebSocket(`${proto}://${location.host}/ws?role=laptop`);
+  phone.ws = ws;
+  ws.onopen = () => { phone.retryMs = 500; };
+  ws.onmessage = async (ev) => {
+    const msg = JSON.parse(ev.data);
+    if (msg.type === "phone_status") setPhoneStatus(msg.connected, msg.devices);
+    else if (msg.type === "phone_photo_received") log(`Photo received from phone (${(msg.bytes / 1e6).toFixed(1)} MB) - detecting…`);
+    else if (msg.type === "detection_failed") log(`Phone photo: ${msg.detail}`, true);
+    else if (msg.type === "detection_result") {
+      const img = await loadImage(`/api/latest.jpg?id=${msg.image_id}`);
+      showResult(msg.result, img, "PHONE · ");
+    }
+  };
+  ws.onclose = () => {
+    phone.ws = null;
+    setPhoneStatus(false);
+    $("phone-state").textContent = "SERVER?";
+    setTimeout(() => { loadSession(); connectPhoneLink(); }, phone.retryMs = Math.min(phone.retryMs * 2, 5000));
+  };
+}
+
+function requestPhonePhoto() {
+  if (phone.ws?.readyState !== 1 || !phone.connected) { log("No phone connected.", true); return; }
+  phone.ws.send(JSON.stringify({ type: "capture_request" }));
+  log("Asked the phone for a photo - tap TAKE PHOTO on the phone.");
+}
 // ---------------------------------------------------------------- drawing
 
 function centroid(points) {
@@ -417,7 +357,7 @@ function pointInPoly([x, y], poly) {
 }
 
 function pinAt(ev) {
-  if (state.mode !== "frozen" || !state.result) return -1;
+  if (!state.result) return -1;
   const pt = imageCoords(ev);
   return state.result.pins.findIndex((p) => pointInPoly(pt, p.box));
 }
@@ -475,10 +415,10 @@ window.addEventListener("mousemove", (ev) => {
 
 // ---------------------------------------------------------------- wiring
 
-$("capture-btn").onclick = capture;
-$("live-btn").onclick = () => { setMode("live"); resetView(); };
-$("refresh-btn").onclick = listCameras;
-$("camera-select").onchange = (e) => startCamera(e.target.value);
+$("phone-request").onclick = requestPhonePhoto;
+$("phone-net").onchange = showQr;
+$("phone-show-qr").onclick = () => { $("phone-qr").hidden = !$("phone-qr").hidden; };
+$("phone-refresh").onclick = loadSession;
 $("upload").onchange = (e) => { if (e.target.files[0]) upload(e.target.files[0]); e.target.value = ""; };
 ["show-boxes", "show-labels", "show-outline"].forEach((id) => ($(id).onchange = draw));
 $("filter").oninput = applyFilter;
@@ -489,14 +429,11 @@ document.querySelector("#pin-table tbody").onclick = (e) => {
 
 window.addEventListener("keydown", (e) => {
   if (e.target.tagName === "INPUT" || e.target.tagName === "SELECT") return;
-  if (e.code === "Space") { e.preventDefault(); capture(); }
-  else if (e.key === "l" || e.key === "L") { setMode("live"); resetView(); }
+  if (e.code === "Space") { e.preventDefault(); requestPhonePhoto(); }
   else if (e.key === "0") resetView();
   else if (e.key === "Escape") { state.selected.clear(); renderTable(); draw(); }
 });
 
-navigator.mediaDevices?.addEventListener?.("devicechange", listCameras);
-
-setMode("live");
-listCameras();
-updateFocusMeter();
+showCanvas(false);
+loadSession();
+connectPhoneLink();
