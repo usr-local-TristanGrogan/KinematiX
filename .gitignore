@@ -9,3 +9,6 @@ rectified*.jpg
 pins.json
 pose*.jpg
 pose.json
+checkerboard.png
+computer-vision/frames/
+frames/

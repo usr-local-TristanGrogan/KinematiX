@@ -38,6 +38,19 @@ def camera_matrix_from_exif(path: str, img_shape) -> np.ndarray:
     return np.array([[f_px, 0, w / 2], [0, f_px, h / 2], [0, 0, 1]], np.float64)
 
 
+def load_calib(path: str, img_shape):
+    """Load a calibration npz and rescale it if the image size differs from calibration."""
+    c = np.load(path)
+    K, dist = c["camera_matrix"].copy(), c["dist_coeffs"]
+    cw, ch = c["image_size"]
+    h, w = img_shape[:2]
+    if (w, h) != (cw, ch):
+        if abs(w / h - cw / ch) > 0.01:
+            raise RuntimeError(f"Calibrated at {cw}x{ch} but image is {w}x{h} (different aspect/orientation).")
+        K[:2] *= w / cw
+    return K, dist
+
+
 def template_mm(board: str) -> np.ndarray:
     """Physical (x, y, 0) position in mm of each template pin, origin at layout centre."""
     prof = pf.BOARDS[board]
@@ -71,7 +84,12 @@ def estimate_pose(img, K, dist=None, board="metro_grand_central"):
     yaw = float(np.degrees(np.arctan2(R[1, 0], R[0, 0])))
 
     t = tvec.ravel()
+    pins_cam = obj @ R.T + t
+    pins_3d = [{"label": p.label, "header": p.header, "detected": p.detected,
+                "x": float(x), "y": float(y), "z": float(z)}
+               for p, (x, y, z) in zip(pins, pins_cam)]
     return {
+        "pins_3d": pins_3d,  # each pin's position in the camera frame, mm
         "position_mm": {"x": float(t[0]), "y": float(t[1]), "z": float(t[2])},
         "distance_mm": float(np.linalg.norm(t)),
         "tilt_deg": tilt,            # angle between board plane and image plane
@@ -109,13 +127,13 @@ def main():
     ap.add_argument("--fx", type=float, help="override focal length in pixels")
     ap.add_argument("--out", default="pose.jpg")
     ap.add_argument("--json", help="write pose as JSON")
+    ap.add_argument("--pin", nargs="*", default=[], help="print 3D position of these pins, e.g. D13 SDA")
     args = ap.parse_args()
 
     img = pf.load_image(args.image)
     dist = None
     if args.calib:
-        c = np.load(args.calib)
-        K, dist = c["camera_matrix"], c["dist_coeffs"]
+        K, dist = load_calib(args.calib, img.shape)
     else:
         K = camera_matrix_from_exif(args.image, img.shape)
     if args.fx:
@@ -128,6 +146,10 @@ def main():
     print(f"Tilt {pose['tilt_deg']:.1f} deg, yaw {pose['yaw_deg']:.1f} deg, "
           f"reprojection error {pose['reprojection_error_px']:.2f} px over {pose['pins_used']} pins "
           f"(focal length {K[0, 0]:.0f} px)")
+    for name in args.pin:
+        for q in pose["pins_3d"]:
+            if q["label"].upper() == name.upper():
+                print(f"  {q['label']:6s} ({q['header']}): x={q['x']:.1f} y={q['y']:.1f} z={q['z']:.1f} mm")
 
     cv2.imwrite(args.out, draw_pose(img, pose, K, dist))
     print(f"Pose image -> {args.out}")

@@ -50,3 +50,27 @@ Camera intrinsics come from the photo's EXIF focal length by default. For
 accurate distances, calibrate the camera with a checkerboard and pass `--calib`.
 The iPhone switches lenses (e.g. ultra-wide macro below ~15 cm), which changes
 the intrinsics, so keep the camera distance and lens fixed in the robot setup.
+
+`--pin D13 SDA` prints each pin's 3D position in the camera frame; `--json`
+includes all pins under `pins_3d`.
+
+## Camera calibration
+
+```bash
+python calibrate.py make-board --out checkerboard.png   # print at 100%, measure a square
+python calibrate.py live --camera 0 --square-mm 20      # SPACE to capture 15-25 views, Q to finish
+python calibrate.py photos calib/*.HEIC --square-mm 20  # or from phone photos
+```
+
+Calibrate with the same camera, lens and resolution used at runtime. Writes
+`camera_calib.npz`.
+
+## Live view
+
+```bash
+python live.py --camera 0 --calib camera_calib.npz --pin D13 SDA
+```
+
+Shows detected pins, board axes, and the 3D position of the requested pins.
+The iPhone appears as a camera via Continuity Camera; the terminal (or Cursor)
+needs camera permission in System Settings > Privacy & Security > Camera.
