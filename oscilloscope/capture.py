@@ -355,7 +355,14 @@ def save_capture(raw, timestamps, volts, metadata, edges, thresholds):
     ) as file:
         writer = csv.writer(file)
         writer.writerow(["time_s", "voltage_v", "raw_adc_code"])
-        writer.writerows(zip(timestamps, volts, raw))
+        writer.writerows(
+            (
+                f"{timestamp:.7f}",
+                f"{voltage:.7f}",
+                int(adc_code),
+            )
+            for timestamp, voltage, adc_code in zip(timestamps, volts, raw)
+        )
 
     # Edge list; no bit or protocol interpretation.
     edge_fields = [
@@ -377,7 +384,19 @@ def save_capture(raw, timestamps, volts, metadata, edges, thresholds):
     ) as file:
         writer = csv.DictWriter(file, fieldnames=edge_fields)
         writer.writeheader()
-        writer.writerows(edges)
+        writer.writerows(
+            {
+                **edge,
+                "time_s": f"{edge['time_s']:.7f}",
+                "voltage_v": f"{edge['voltage_v']:.7f}",
+                "time_since_previous_edge_s": (
+                    ""
+                    if edge["time_since_previous_edge_s"] == ""
+                    else f"{edge['time_since_previous_edge_s']:.7f}"
+                ),
+            }
+            for edge in edges
+        )
 
     metadata["sample_count"] = int(len(raw))
     metadata["capture_duration_seconds"] = (
@@ -389,6 +408,7 @@ def save_capture(raw, timestamps, volts, metadata, edges, thresholds):
     metadata["voltage_mean"] = float(np.mean(volts))
     metadata["edge_count"] = len(edges)
     metadata["edge_thresholds"] = thresholds
+    metadata["csv_time_decimal_places"] = 7
 
     with open(output_dir / "metadata.json", "w") as file:
         json.dump(metadata, file, indent=2)
