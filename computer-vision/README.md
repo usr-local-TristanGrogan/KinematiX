@@ -58,19 +58,8 @@ includes all pins under `pins_3d`.
 
 ```bash
 python calibrate.py make-board --out checkerboard.png   # print at 100%, measure a square
-python calibrate.py live --camera 0 --square-mm 20      # SPACE to capture 15-25 views, Q to finish
-python calibrate.py photos calib/*.HEIC --square-mm 20  # or from phone photos
+python calibrate.py photos calib/*.HEIC --square-mm 20  # 15-25 photos of the board
 ```
 
 Calibrate with the same camera, lens and resolution used at runtime. Writes
 `camera_calib.npz`.
-
-## Live view
-
-```bash
-python live.py --camera 0 --calib camera_calib.npz --pin D13 SDA
-```
-
-Shows detected pins, board axes, and the 3D position of the requested pins.
-The iPhone appears as a camera via Continuity Camera; the terminal (or Cursor)
-needs camera permission in System Settings > Privacy & Security > Camera.

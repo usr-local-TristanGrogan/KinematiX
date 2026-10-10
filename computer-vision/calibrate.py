@@ -7,10 +7,8 @@ board_pose.py needs for accurate distances (pass the result with --calib).
      python calibrate.py make-board --out checkerboard.png
    Measure one square with a ruler and use that value for --square-mm.
 
-2. Capture 15-25 views of the board, tilted and moved around the frame,
-   with the SAME camera, lens and resolution you'll use for the robot:
-     python calibrate.py live --camera 0 --square-mm 20      # SPACE = capture, Q = finish
-   or from photos you took on the phone:
+2. Take 15-25 photos of the board, tilted and moved around the frame,
+   with the SAME camera, lens and resolution you'll use:
      python calibrate.py photos calib_photos/*.HEIC --square-mm 20
 """
 
@@ -80,73 +78,20 @@ def run_photos(paths, square_mm, out):
     calibrate(views, size, square_mm, out)
 
 
-def run_live(camera, square_mm, out, width, height):
-    cap = open_camera(camera, width, height)
-    views, size = [], None
-    print("SPACE = capture view, Q = calibrate and quit. Vary angle, distance and position.")
-    while True:
-        ok, frame = cap.read()
-        if not ok:
-            raise SystemExit("Camera stopped delivering frames.")
-        size = (frame.shape[1], frame.shape[0])
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        small = cv2.resize(gray, None, fx=0.5, fy=0.5)
-        corners = find_corners(small)
-        disp = frame.copy()
-        if corners is not None:
-            cv2.drawChessboardCorners(disp, PATTERN, corners * 2, True)
-        cv2.putText(disp, f"views: {len(views)}  (SPACE capture, Q finish)", (20, 40),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-        cv2.imshow("calibrate", disp)
-        k = cv2.waitKey(1) & 0xFF
-        if k == ord(" "):
-            full = find_corners(gray)
-            if full is not None:
-                views.append(full)
-                print(f"captured view {len(views)}")
-            else:
-                print("board not found in full-res frame, try again")
-        elif k in (ord("q"), 27):
-            break
-    cap.release()
-    cv2.destroyAllWindows()
-    if len(views) < 8:
-        raise SystemExit(f"Only {len(views)} views; need at least 8 (15+ recommended).")
-    calibrate(views, size, square_mm, out)
-
-
-def open_camera(index, width=None, height=None):
-    cap = cv2.VideoCapture(index, cv2.CAP_AVFOUNDATION)
-    if width and height:
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-    if not cap.isOpened() or not cap.read()[0]:
-        raise SystemExit(f"Could not open camera {index}. Check camera permission for your terminal/Cursor "
-                         "in System Settings > Privacy & Security > Camera, and try other indexes.")
-    return cap
-
-
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
     m = sub.add_parser("make-board")
     m.add_argument("--out", default="checkerboard.png")
     m.add_argument("--square-mm", type=float, default=20.0)
-    lv = sub.add_parser("live")
-    lv.add_argument("--camera", type=int, default=0)
-    lv.add_argument("--width", type=int, default=1920)
-    lv.add_argument("--height", type=int, default=1080)
     ph = sub.add_parser("photos")
     ph.add_argument("paths", nargs="+")
-    for p in (lv, ph):
-        p.add_argument("--square-mm", type=float, required=True, help="measured size of one printed square")
-        p.add_argument("--out", default="camera_calib.npz")
+    ph.add_argument("--square-mm", type=float, required=True, help="measured size of one printed square")
+    ph.add_argument("--out", default="camera_calib.npz")
     args = ap.parse_args()
 
     if args.cmd == "make-board":
         make_board(args.out, args.square_mm)
-    elif args.cmd == "live":
-        run_live(args.camera, args.square_mm, args.out, args.width, args.height)
     else:
         paths = [q for p in args.paths for q in (glob.glob(p) or [p])]
         run_photos(paths, args.square_mm, args.out)
