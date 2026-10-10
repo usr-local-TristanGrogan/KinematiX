@@ -129,6 +129,7 @@ function sharpness(source, srcW, srcH) {
 }
 
 const focus = { history: [] };
+const FOCUS_GOOD = 1500, FOCUS_MIN = 500;
 function updateFocusMeter() {
   if (state.mode === "live" && state.stream && video.videoWidth) {
     const s = sharpness(video, video.videoWidth, video.videoHeight);
@@ -137,8 +138,11 @@ function updateFocusMeter() {
     focus.history = focus.history.filter(([t]) => now - t < 8000);
     const best = Math.max(...focus.history.map(([, v]) => v));
     const ratio = best > 0 ? s / best : 0;
+    // Absolute floors: a blank or blurry scene can be "as sharp as recently seen" but still useless.
+    // Measured: in-focus board ~6000, out-of-focus ~15-350.
+    const level = ratio > 0.8 && s > FOCUS_GOOD ? "good" : ratio > 0.5 && s > FOCUS_MIN ? "mid" : "bad";
     $("focus-bar").style.width = `${Math.round(Math.min(1, ratio) * 100)}%`;
-    $("focus-bar").className = ratio > 0.8 ? "good" : ratio > 0.5 ? "mid" : "bad";
+    $("focus-bar").className = level;
     $("focus-val").textContent = Math.round(s).toString().padStart(4, " ");
   }
   setTimeout(updateFocusMeter, 250);

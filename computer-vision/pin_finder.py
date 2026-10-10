@@ -76,7 +76,8 @@ def metro_grand_central_template():
 BOARDS = {
     "metro_grand_central": {
         "template": metro_grand_central_template,
-        # HSV range (OpenCV: H 0-180) of the solder mask
+        # HSV range (OpenCV: H 0-180) of the solder mask in well-lit photos;
+        # an adaptive colour mask covers webcam streams and odd white balance.
         "mask_hsv": ((115, 60, 40), (165, 255, 255)),
         "pitch": 50.0,
         # mm per reference pixel: x from the 0.1" header pitch, y from the
@@ -96,26 +97,103 @@ def load_image(path) -> np.ndarray:
     return cv2.cvtColor(np.array(im), cv2.COLOR_RGB2BGR)
 
 
-def find_board(img: np.ndarray, mask_hsv) -> np.ndarray:
-    """Return the board's 4 corners (float32, TL/TR/BR/BL with long side horizontal)."""
-    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-    mask = cv2.inRange(hsv, *mask_hsv)
-    k = max(5, int(min(img.shape[:2]) * 0.01) | 1)
+def white_balance(img: np.ndarray) -> np.ndarray:
+    """White-patch balance using the brightest unsaturated pixels (silkscreen, labels)."""
+    f = img.astype(np.float32)
+    sat = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)[..., 1]
+    v = f.max(2)
+    cand = (sat < 60) & (v < 254)
+    if cand.sum() < 500:
+        return img
+    sel = cand & (v >= np.percentile(v[cand], 99))
+    ref = f[sel].mean(0)
+    gain = np.clip(ref.mean() / np.maximum(ref, 1), 0.6, 1.6)
+    return np.clip(f * gain, 0, 255).astype(np.uint8)
+
+
+def gold_mask(hsv: np.ndarray) -> np.ndarray:
+    return cv2.inRange(hsv, (14, 90, 120), (35, 255, 255))
+
+
+def pad_cluster_hull(img: np.ndarray, gold: np.ndarray):
+    """Convex hull of the largest cluster of pad-sized gold blobs, or None."""
+    n, _, stats, cent = cv2.connectedComponentsWithStats(gold)
+    area = img.shape[0] * img.shape[1]
+    idx = [i for i in range(1, n) if 5e-6 * area < stats[i, cv2.CC_STAT_AREA] < 1.5e-3 * area]
+    if len(idx) < 8:
+        return None
+    pts = cent[idx].astype(np.float32)
+    near = np.linalg.norm(pts[:, None] - pts[None], axis=2) < 0.06 * min(img.shape[:2])
+    label = -np.ones(len(pts), int)
+    for seed in range(len(pts)):
+        if label[seed] >= 0:
+            continue
+        label[seed], stack = seed, [seed]
+        while stack:
+            j = stack.pop()
+            for k in np.where(near[j] & (label < 0))[0]:
+                label[k] = seed
+                stack.append(k)
+    biggest = np.bincount(label).argmax()
+    return cv2.convexHull(pts[label == biggest])
+
+
+def adaptive_board_mask(img: np.ndarray, hsv: np.ndarray, gold: np.ndarray):
+    """Mask of pixels matching the board colour, learned from inside the pad cluster.
+
+    Handles white-balance shifts and other board colours that a fixed HSV range misses.
+    """
+    hull = pad_cluster_hull(img, gold)
+    if hull is None:
+        return None
+    region = np.zeros(img.shape[:2], np.uint8)
+    cv2.fillConvexPoly(region, hull.astype(np.int32), 255)
+    silkscreen = (hsv[..., 1] < 50) & (hsv[..., 2] > 150)
+    sample = (region > 0) & (gold == 0) & ~silkscreen & (hsv[..., 2] > 40)
+    if sample.sum() < 500:
+        return None
+    lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB).astype(np.float32)
+    ref = np.median(lab[sample], 0)
+    d_ab = np.hypot(lab[..., 1] - ref[1], lab[..., 2] - ref[2])
+    return ((d_ab < 12) & (np.abs(lab[..., 0] - ref[0]) < 50)).astype(np.uint8) * 255
+
+
+def board_rect(mask: np.ndarray, gold: np.ndarray):
+    """Corners of the mask blob containing the most gold pads (TL/TR/BR/BL, long side horizontal)."""
+    mask = mask | gold
+    k = max(5, int(min(mask.shape) * 0.01) | 1)
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_RECT, (k, k)))
     mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (k // 2 | 1,) * 2))
     cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    cnts = [c for c in cnts if 0.02 * mask.size <= cv2.contourArea(c) <= 0.9 * mask.size]
     if not cnts:
-        raise RuntimeError("No board found - check lighting or the board's mask_hsv range.")
-    c = max(cnts, key=cv2.contourArea)
-    if cv2.contourArea(c) < 0.02 * mask.size:
-        raise RuntimeError("Board region too small - move the phone closer.")
+        return None
 
-    box = cv2.boxPoints(cv2.minAreaRect(c))
+    def gold_inside(c):
+        region = np.zeros_like(mask)
+        cv2.drawContours(region, [c], -1, 255, -1)
+        return cv2.countNonZero(gold & region)
+
+    box = cv2.boxPoints(cv2.minAreaRect(max(cnts, key=gold_inside)))
     s, d = box.sum(1), np.diff(box, axis=1).ravel()
     tl, br, tr, bl = box[np.argmin(s)], box[np.argmax(s)], box[np.argmin(d)], box[np.argmax(d)]
     if np.linalg.norm(tr - tl) < np.linalg.norm(bl - tl):
         return np.float32([bl, tl, tr, br])
     return np.float32([tl, tr, br, bl])
+
+
+def find_board_candidates(img: np.ndarray, mask_hsv) -> list:
+    """Candidate board corner sets, from the fixed colour range and the adaptive colour mask."""
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    gold = gold_mask(hsv)
+    masks = [cv2.inRange(hsv, *mask_hsv)]
+    adaptive = adaptive_board_mask(img, hsv, gold)
+    if adaptive is not None:
+        masks.append(adaptive)
+    cands = [r for r in (board_rect(m, gold) for m in masks) if r is not None]
+    if not cands:
+        raise RuntimeError("No board found - move the phone closer or improve lighting.")
+    return cands
 
 
 def pad_mask(warp: np.ndarray) -> np.ndarray:
@@ -143,6 +221,35 @@ def snap(template_xy: np.ndarray, pads: np.ndarray, radius: float):
     return idx, dist
 
 
+def fit_template(txy: np.ndarray, pads: np.ndarray, pitch: float):
+    """Align template pins to detected pads; returns (fitted positions, pad index per pin or -1).
+
+    Starts with a similarity transform (rotation/scale/shift) so a partial set of
+    matches can't swing unmatched headers off the board, then loosens to an
+    affine, and only uses a full homography once matches cover most pins.
+    """
+    xy = txy.copy()
+    idx, _ = snap(xy, pads, 0.45 * pitch)
+    for step, radius in (("similarity", 0.45), ("affine", 0.4), ("homography", 0.3)):
+        ok = idx >= 0
+        if ok.sum() < 6:
+            break
+        src, dst = xy[ok], pads[idx[ok]]
+        if step == "homography":
+            if ok.sum() < 0.6 * len(xy):
+                break
+            M, _ = cv2.findHomography(src, dst, cv2.RANSAC, 0.2 * pitch)
+            if M is not None:
+                xy = cv2.perspectiveTransform(xy[None], M)[0]
+        else:
+            est = cv2.estimateAffinePartial2D if step == "similarity" else cv2.estimateAffine2D
+            M, _ = est(src, dst, method=cv2.RANSAC, ransacReprojThreshold=0.2 * pitch)
+            if M is not None:
+                xy = cv2.transform(xy[None], M)[0]
+        idx, _ = snap(xy, pads, radius * pitch)
+    return xy.astype(np.float32), idx
+
+
 # --------------------------------------------------------------------------
 # Main detection
 # --------------------------------------------------------------------------
@@ -165,35 +272,26 @@ def find_pins(img: np.ndarray, board: str = "metro_grand_central"):
     txy = np.float32([[t[1], t[2]] for t in template])
     pitch = prof["pitch"]
 
-    corners = find_board(img, prof["mask_hsv"])
+    img = white_balance(img)
     dst = np.float32([[0, 0], [REF_W, 0], [REF_W, REF_H], [0, REF_H]])
 
-    # Try both 180-degree orientations, keep whichever matches more pads.
+    # Every board outline candidate x both 180-degree orientations; keep the
+    # fit that lands on the most pads.
     best = None
-    for rot in (0, 2):
-        src = np.roll(corners, -rot, axis=0)
-        H = cv2.getPerspectiveTransform(src, dst)
-        warp = cv2.warpPerspective(img, H, (REF_W, REF_H))
-        pads = pad_centroids(pad_mask(warp), pitch)
-        idx, _ = snap(txy, pads, 0.4 * pitch)
-        score = int((idx >= 0).sum())
-        if best is None or score > best[0]:
-            best = (score, H, warp, pads, idx)
-    score, H, warp, pads, idx = best
-
-    # Refine: homography from template -> matched pads, then re-snap tighter.
-    for radius in (0.4 * pitch, 0.3 * pitch):
-        ok = idx >= 0
-        if ok.sum() >= 8:
-            R, _ = cv2.findHomography(txy[ok], pads[idx[ok]], cv2.RANSAC, 0.2 * pitch)
-            if R is not None:
-                txy = cv2.perspectiveTransform(txy[None], R)[0]
-        idx, _ = snap(txy, pads, radius)
+    for corners in find_board_candidates(img, prof["mask_hsv"]):
+        for rot in (0, 2):
+            H = cv2.getPerspectiveTransform(np.roll(corners, -rot, axis=0), dst)
+            warp = cv2.warpPerspective(img, H, (REF_W, REF_H))
+            pads = pad_centroids(pad_mask(warp), pitch)
+            fitted, idx = fit_template(txy, pads, pitch)
+            score = int((idx >= 0).sum())
+            if best is None or score > best[0]:
+                best = (score, H, warp, fitted, idx, corners)
+    _, H, warp, warp_xy, idx, corners = best
 
     # Report the fitted layout position: glare can split a pad into fragments,
     # so individual blob centroids are noisier than the global fit.
     ok = idx >= 0
-    warp_xy = txy
 
     Hinv = np.linalg.inv(H)
     photo_xy = cv2.perspectiveTransform(warp_xy[None], Hinv)[0]
