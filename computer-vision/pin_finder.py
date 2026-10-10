@@ -57,9 +57,9 @@ def metro_grand_central_template():
 
     vp = 48.9
     pins += _row(["5V"] + [f"D{n}" for n in range(22, 53, 2)] + ["GND"],
-                 1855, 77, 0, vp, "double_row")
+                 1855, 77, 0, vp, "double_row_even")
     pins += _row(["5V"] + [f"D{n}" for n in range(23, 54, 2)] + ["GND"],
-                 1906, 77, 0, vp, "double_row")
+                 1906, 77, 0, vp, "double_row_odd")
 
     bp = 49.4
     pins += _row(["NC", "IOREF", "RESET", "3V3", "5V", "GND", "GND", "VIN"],
@@ -90,7 +90,8 @@ BOARDS = {
 # Image helpers
 # --------------------------------------------------------------------------
 
-def load_image(path: str) -> np.ndarray:
+def load_image(path) -> np.ndarray:
+    """Load from a path or file-like object (JPEG/PNG/HEIC), applying EXIF rotation."""
     im = ImageOps.exif_transpose(Image.open(path)).convert("RGB")
     return cv2.cvtColor(np.array(im), cv2.COLOR_RGB2BGR)
 
@@ -153,6 +154,7 @@ class Pin:
     x: float          # pixel coords in the original photo
     y: float
     detected: bool    # True if a real pad was found here (vs. inferred from layout)
+    box: list         # 4 [x, y] corners of the pin's bounding box in the photo
 
 
 def find_pins(img: np.ndarray, board: str = "metro_grand_central"):
@@ -195,8 +197,12 @@ def find_pins(img: np.ndarray, board: str = "metro_grand_central"):
 
     Hinv = np.linalg.inv(H)
     photo_xy = cv2.perspectiveTransform(warp_xy[None], Hinv)[0]
-    pins = [Pin(l, h, float(x), float(y), bool(o))
-            for l, h, (x, y), o in zip(labels, headers, photo_xy, ok)]
+    half = 0.4 * pitch
+    square = np.float32([[-half, -half], [half, -half], [half, half], [-half, half]])
+    boxes = cv2.perspectiveTransform((warp_xy[:, None, :] + square[None]).reshape(1, -1, 2), Hinv)
+    boxes = boxes.reshape(-1, 4, 2)
+    pins = [Pin(l, h, float(x), float(y), bool(o), b.round(1).tolist())
+            for l, h, (x, y), o, b in zip(labels, headers, photo_xy, ok, boxes)]
     return pins, {"warp": warp, "warp_xy": warp_xy, "corners": corners, "H": H}
 
 
@@ -206,7 +212,7 @@ def find_pins(img: np.ndarray, board: str = "metro_grand_central"):
 
 HEADER_COLOURS = {
     "digital_high": (255, 200, 0), "digital_low": (255, 120, 0), "comms": (0, 200, 255),
-    "double_row": (255, 0, 200), "power": (0, 0, 255), "analog_low": (0, 255, 0),
+    "double_row_even": (255, 0, 200), "double_row_odd": (200, 80, 255), "power": (0, 0, 255), "analog_low": (0, 255, 0),
     "analog_high": (0, 180, 90), "icsp": (255, 255, 255),
 }
 

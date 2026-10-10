@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pin Finder</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">PIN&nbsp;FINDER <span class="sep">//</span> <span id="board-name">METRO M4 GRAND CENTRAL</span></div>
+    <div class="indicators">
+      <div class="ind"><span class="dot" id="cam-dot"></span><span class="k">CAM</span><span id="cam-state">OFFLINE</span></div>
+      <div class="ind opt"><span class="k">MODE</span><span id="mode">LIVE</span></div>
+      <div class="ind opt"><span class="k">RES</span><span id="res">—</span></div>
+      <div class="ind"><span class="k">DETECT</span><span id="detect-ms">—</span></div>
+      <div class="ind"><span class="k">PINS</span><span id="pin-count">—</span></div>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="viewport" id="viewport">
+      <div class="stage" id="stage">
+        <video id="video" autoplay playsinline muted></video>
+        <canvas id="canvas" hidden></canvas>
+      </div>
+      <div class="empty" id="empty">
+        <div class="empty-title">NO CAMERA</div>
+        <div class="empty-sub">Connect your phone as a webcam, then press REFRESH.<br>Or upload a photo.</div>
+      </div>
+      <div class="tooltip" id="tooltip" hidden></div>
+      <div class="viewbar">
+        <span id="view-hint">SPACE CAPTURE · L LIVE · SCROLL ZOOM · DRAG PAN · 0 RESET</span>
+        <span id="zoom-level">100%</span>
+      </div>
+    </section>
+
+    <aside class="panel">
+      <div class="group">
+        <div class="group-title">CAMERA</div>
+        <div class="row">
+          <select id="camera-select"></select>
+          <button id="refresh-btn" class="btn" title="Re-scan cameras">REFRESH</button>
+        </div>
+        <div class="row buttons">
+          <button id="capture-btn" class="btn primary">CAPTURE</button>
+          <button id="live-btn" class="btn">LIVE</button>
+          <label class="btn" for="upload">UPLOAD</label>
+          <input type="file" id="upload" accept="image/*,.heic,.heif" hidden>
+        </div>
+      </div>
+
+      <div class="group">
+        <div class="group-title">DISPLAY</div>
+        <label class="check"><input type="checkbox" id="show-boxes" checked> BOUNDING BOXES</label>
+        <label class="check"><input type="checkbox" id="show-labels" checked> LABELS</label>
+        <label class="check"><input type="checkbox" id="show-outline" checked> BOARD OUTLINE</label>
+      </div>
+
+      <div class="group grow">
+        <div class="group-title">PINS <span class="muted" id="sel-info"></span></div>
+        <input type="search" id="filter" placeholder="FILTER  e.g. D13, A, GND" autocomplete="off">
+        <div class="table-wrap">
+          <table id="pin-table">
+            <thead><tr><th>PIN</th><th>HEADER</th><th>STATUS</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </aside>
+  </main>
+
+  <footer class="statusbar"><span id="log">READY</span></footer>
+
+  <script src="app.js"></script>
+</body>
+</html>

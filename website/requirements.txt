@@ -1,0 +1,4 @@
+-r ../computer-vision/requirements.txt
+fastapi
+uvicorn[standard]
+python-multipart
