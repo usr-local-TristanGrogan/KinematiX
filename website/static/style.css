@@ -28,12 +28,17 @@ body {
   height: 44px; padding: 0 16px;
   background: var(--panel); border-bottom: 2px solid var(--accent);
 }
-.topbar { gap: 24px; white-space: nowrap; }
+.topbar { gap: 24px; white-space: nowrap; min-width: 0; overflow: hidden; }
 .brand { font: 600 14px var(--mono); letter-spacing: 0.12em; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .brand .sep { color: var(--accent); margin: 0 6px; }
 .indicators { display: flex; gap: 20px; font: 12px var(--mono); flex-shrink: 0; }
 .ind { display: flex; align-items: center; gap: 8px; }
 #cam-state { max-width: 200px; overflow: hidden; text-overflow: ellipsis; }
+.meter { width: 70px; height: 9px; background: var(--bg); border: 1px solid var(--line); display: inline-block; }
+#focus-bar { display: block; height: 100%; width: 0; background: var(--err); transition: width 0.2s; }
+#focus-bar.mid { background: var(--accent); }
+#focus-bar.good { background: var(--ok); }
+#focus-val { min-width: 4ch; text-align: right; color: var(--muted); }
 .ind .k { color: var(--muted); letter-spacing: 0.08em; }
 .dot { width: 9px; height: 9px; background: var(--err); display: inline-block; }
 .dot.on { background: var(--ok); }
@@ -43,6 +48,8 @@ body {
 @media (max-width: 1100px) {
   .layout { grid-template-columns: 1fr 280px; }
   .brand #board-name, .brand .sep, .ind.opt { display: none; }
+  .indicators { gap: 14px; }
+  .meter { width: 50px; }
   #cam-state { max-width: 110px; }
 }
 
@@ -149,6 +156,7 @@ tbody tr.selected { background: rgba(242, 183, 5, 0.15); outline: 1px solid var(
 /* Status bar */
 .statusbar {
   height: 26px; padding: 0 16px; display: flex; align-items: center;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   background: var(--panel); border-top: 1px solid var(--line);
   font: 11px var(--mono); color: var(--muted); letter-spacing: 0.05em;
 }

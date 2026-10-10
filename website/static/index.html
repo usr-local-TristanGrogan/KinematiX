@@ -11,9 +11,12 @@
     <div class="brand">PIN&nbsp;FINDER <span class="sep">//</span> <span id="board-name">METRO M4 GRAND CENTRAL</span></div>
     <div class="indicators">
       <div class="ind"><span class="dot" id="cam-dot"></span><span class="k">CAM</span><span id="cam-state">OFFLINE</span></div>
+      <div class="ind" title="Live sharpness relative to the sharpest frame in the last 8 s. Wait for green before capturing.">
+        <span class="k">FOCUS</span><span class="meter"><span id="focus-bar"></span></span><span id="focus-val">—</span>
+      </div>
       <div class="ind opt"><span class="k">MODE</span><span id="mode">LIVE</span></div>
       <div class="ind opt"><span class="k">RES</span><span id="res">—</span></div>
-      <div class="ind"><span class="k">DETECT</span><span id="detect-ms">—</span></div>
+      <div class="ind opt"><span class="k">DETECT</span><span id="detect-ms">—</span></div>
       <div class="ind"><span class="k">PINS</span><span id="pin-count">—</span></div>
     </div>
   </header>
@@ -70,7 +73,7 @@
     </aside>
   </main>
 
-  <footer class="statusbar"><span id="log">READY</span></footer>
+  <footer class="statusbar" title=""><span id="log">READY</span></footer>
 
   <script src="app.js"></script>
 </body>

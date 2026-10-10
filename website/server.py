@@ -23,6 +23,9 @@ import pin_finder as pf  # noqa: E402
 
 app = FastAPI(title="Pin Finder")
 
+# Below this the layout fit can lock onto the wrong pads (seen with blurry frames).
+MIN_DETECTED_FRACTION = 0.3
+
 
 @app.get("/api/boards")
 def boards():
@@ -41,11 +44,17 @@ async def detect(image: UploadFile = File(...), board: str = "metro_grand_centra
         raise HTTPException(400, "Could not read image (JPEG, PNG or HEIC expected).")
 
     t0 = time.perf_counter()
+    hint = ("Make sure the image is in focus (phone ~20-30 cm away; the main lens can't focus closer) "
+            "and the whole board is visible.")
     try:
         pins, dbg = pf.find_pins(img, board)
     except RuntimeError as e:
-        raise HTTPException(422, str(e))
+        raise HTTPException(422, f"{e} {hint}")
     ms = (time.perf_counter() - t0) * 1000
+
+    n_det = sum(p.detected for p in pins)
+    if n_det < MIN_DETECTED_FRACTION * len(pins):
+        raise HTTPException(422, f"Only {n_det}/{len(pins)} pads found, too few to trust the result. {hint}")
 
     result = {
         "board": board,

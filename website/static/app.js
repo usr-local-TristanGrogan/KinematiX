@@ -27,6 +27,7 @@ const state = {
 
 function log(msg, isError = false) {
   $("log").textContent = msg;
+  $("log").parentElement.title = msg;
   $("log").parentElement.classList.toggle("error", isError);
 }
 
@@ -100,16 +101,68 @@ function stopCamera() {
   $("cam-state").textContent = "OFFLINE";
 }
 
+// ---------------------------------------------------------------- focus
+
+const probe = document.createElement("canvas");
+const probeCtx = probe.getContext("2d", { willReadFrequently: true });
+
+// Variance of the Laplacian over the central region of a source, on a downscaled copy.
+// Higher = sharper. Only meaningful relative to other frames of the same scene.
+function sharpness(source, srcW, srcH) {
+  const w = 480, h = Math.round((480 * srcH) / srcW);
+  probe.width = w; probe.height = h;
+  probeCtx.drawImage(source, 0, 0, w, h);
+  const x0 = Math.round(w * 0.2), y0 = Math.round(h * 0.2), cw = Math.round(w * 0.6), ch = Math.round(h * 0.6);
+  const d = probeCtx.getImageData(x0, y0, cw, ch).data;
+  const g = new Float32Array(cw * ch);
+  for (let i = 0, j = 0; j < g.length; i += 4, j++) g[j] = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+  let sum = 0, sum2 = 0, n = 0;
+  for (let y = 1; y < ch - 1; y++) {
+    for (let x = 1; x < cw - 1; x++) {
+      const k = y * cw + x;
+      const lap = g[k - 1] + g[k + 1] + g[k - cw] + g[k + cw] - 4 * g[k];
+      sum += lap; sum2 += lap * lap; n++;
+    }
+  }
+  const mean = sum / n;
+  return sum2 / n - mean * mean;
+}
+
+const focus = { history: [] };
+function updateFocusMeter() {
+  if (state.mode === "live" && state.stream && video.videoWidth) {
+    const s = sharpness(video, video.videoWidth, video.videoHeight);
+    const now = performance.now();
+    focus.history.push([now, s]);
+    focus.history = focus.history.filter(([t]) => now - t < 8000);
+    const best = Math.max(...focus.history.map(([, v]) => v));
+    const ratio = best > 0 ? s / best : 0;
+    $("focus-bar").style.width = `${Math.round(Math.min(1, ratio) * 100)}%`;
+    $("focus-bar").className = ratio > 0.8 ? "good" : ratio > 0.5 ? "mid" : "bad";
+    $("focus-val").textContent = Math.round(s).toString().padStart(4, " ");
+  }
+  setTimeout(updateFocusMeter, 250);
+}
+
 // ---------------------------------------------------------------- capture + detect
+
+const BURST_FRAMES = 12;
 
 async function capture() {
   if (!state.stream || !video.videoWidth) { log("No live camera to capture from.", true); return; }
-  const off = document.createElement("canvas");
-  off.width = video.videoWidth;
-  off.height = video.videoHeight;
-  off.getContext("2d").drawImage(video, 0, 0);
-  const bitmap = await createImageBitmap(off);
-  const blob = await new Promise((r) => off.toBlob(r, "image/jpeg", 0.95));
+  log("Capturing - hold still…");
+  const w = video.videoWidth, h = video.videoHeight;
+  let best = null, bestScore = -1;
+  for (let i = 0; i < BURST_FRAMES; i++) {
+    const frame = document.createElement("canvas");
+    frame.width = w; frame.height = h;
+    frame.getContext("2d").drawImage(video, 0, 0);
+    const score = sharpness(frame, w, h);
+    if (score > bestScore) { best = frame; bestScore = score; }
+    await new Promise((r) => setTimeout(r, 60));
+  }
+  const bitmap = await createImageBitmap(best);
+  const blob = await new Promise((r) => best.toBlob(r, "image/jpeg", 0.95));
   await detect(blob, bitmap, "snapshot.jpg");
 }
 
@@ -442,3 +495,4 @@ navigator.mediaDevices?.addEventListener?.("devicechange", listCameras);
 
 setMode("live");
 listCameras();
+updateFocusMeter();
