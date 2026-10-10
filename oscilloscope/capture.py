@@ -29,9 +29,10 @@ WAVEFORM_BLOCK_RETRY_DELAY_SECONDS = 0.25
 # LAN:   TCPIP0::192.168.1.100::INSTR
 VISA_RESOURCE = None
 
-# Thresholds are derived from the captured signal's voltage range.
-# Increase this if noise creates too many false transitions.
-HYSTERESIS_FRACTION = 0.10
+# Fixed hysteresis thresholds for the captured 0-5 V UART signal.
+# Adjust these if the interface uses different logic levels.
+EDGE_LOW_THRESHOLD_VOLTS = 1.5
+EDGE_HIGH_THRESHOLD_VOLTS = 3.5
 
 
 # ---------------- Instrument connection ----------------
@@ -264,7 +265,7 @@ def acquire_waveform(scope):
             scope, ":TIM:SCAL?"
         ),
         "waveform_download_chunk_points": WAVEFORM_CHUNK_POINTS,
-        "threshold_method": "percentile-derived hysteresis",
+        "threshold_method": "fixed-voltage hysteresis",
         "protocol_decoding_performed": False,
     }
 
@@ -275,7 +276,7 @@ def acquire_waveform(scope):
 
 def extract_edges(timestamps, volts):
     """
-    Extract candidate transitions using two thresholds.
+    Extract candidate transitions using fixed logic-level thresholds.
 
     This is only signal preprocessing, not UART decoding.
     Original samples are preserved separately.
@@ -283,24 +284,13 @@ def extract_edges(timestamps, volts):
     if len(volts) < 3:
         return [], None
 
-    low_percentile = float(np.percentile(volts, 10))
-    high_percentile = float(np.percentile(volts, 90))
-    signal_range = high_percentile - low_percentile
-
-    if signal_range <= 0:
-        return [], {
-            "low_threshold_volts": low_percentile,
-            "high_threshold_volts": high_percentile,
-            "warning": "No measurable signal range",
-        }
-
-    # Hysteresis reduces repeated toggles near a threshold.
-    low_threshold = (
-        low_percentile + signal_range * HYSTERESIS_FRACTION
-    )
-    high_threshold = (
-        high_percentile - signal_range * HYSTERESIS_FRACTION
-    )
+    low_threshold = EDGE_LOW_THRESHOLD_VOLTS
+    high_threshold = EDGE_HIGH_THRESHOLD_VOLTS
+    if low_threshold >= high_threshold:
+        raise ValueError(
+            "EDGE_LOW_THRESHOLD_VOLTS must be below "
+            "EDGE_HIGH_THRESHOLD_VOLTS."
+        )
 
     state = None
     edges = []
@@ -338,10 +328,7 @@ def extract_edges(timestamps, volts):
     thresholds = {
         "low_threshold_volts": low_threshold,
         "high_threshold_volts": high_threshold,
-        "low_percentile_volts": low_percentile,
-        "high_percentile_volts": high_percentile,
-        "signal_range_volts": signal_range,
-        "hysteresis_fraction": HYSTERESIS_FRACTION,
+        "method": "fixed-voltage hysteresis",
     }
 
     return edges, thresholds
