@@ -79,6 +79,9 @@ BOARDS = {
         # HSV range (OpenCV: H 0-180) of the solder mask
         "mask_hsv": ((115, 60, 40), (165, 255, 255)),
         "pitch": 50.0,
+        # mm per reference pixel: x from the 0.1" header pitch, y from the
+        # 1.9" spacing between the top and bottom header rows
+        "mm_per_ref": (2.54 / 50.2, 48.26 / 925),
     },
 }
 

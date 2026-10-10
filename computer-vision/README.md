@@ -34,3 +34,19 @@ Outputs:
 4. Map pin positions back to the original photo.
 
 To support another board, add a template function and an entry in `BOARDS` in `pin_finder.py`.
+
+## Board pose (distance and orientation from the camera)
+
+```bash
+cd computer-vision
+python board_pose.py samples/IMG_4899.HEIC --out pose.jpg --json pose.json
+```
+
+Uses the detected pins plus the board's known physical layout to solve for the
+board's 3D position (`cv2.solvePnP`). Output is in the camera frame (X right,
+Y down, Z out of the lens, mm), with the origin at the centre of the pin layout.
+
+Camera intrinsics come from the photo's EXIF focal length by default. For
+accurate distances, calibrate the camera with a checkerboard and pass `--calib`.
+The iPhone switches lenses (e.g. ultra-wide macro below ~15 cm), which changes
+the intrinsics, so keep the camera distance and lens fixed in the robot setup.

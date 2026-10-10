@@ -7,3 +7,5 @@ __pycache__/
 annotated*.jpg
 rectified*.jpg
 pins.json
+pose*.jpg
+pose.json
