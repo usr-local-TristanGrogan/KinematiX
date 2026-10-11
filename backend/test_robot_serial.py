@@ -59,6 +59,50 @@ class RobotSerialTests(unittest.TestCase):
             with self.assertRaisesRegex(SerialCommunicationError, "motor stalled"):
                 client.move(1, 2)
 
+    def test_move_waits_for_firmware_completion_after_acceptance(self):
+        client, fake = self.make_client(b"OK MOVING Q1=12 Q2=80\r\nEVENT DONE\r\n")
+        with client:
+            self.assertEqual(client.move(1, 2), "EVENT DONE")
+        self.assertEqual(fake.response, b"")
+
+    def test_startup_banner_and_blank_lines_do_not_complete_a_move(self):
+        client, _ = self.make_client(
+            b"READY ROBOT F446RE 115200 8N1\r\n\r\nOK MOVING Q1=1 Q2=90\nEVENT DONE\n"
+        )
+        with client:
+            self.assertEqual(client.move(1, 2), "EVENT DONE")
+
+    def test_already_at_target_completes_immediately(self):
+        client, _ = self.make_client(b"OK DONE Q1=0 Q2=90\n")
+        with client:
+            self.assertEqual(client.move(1, 2), "OK DONE Q1=0 Q2=90")
+
+    def test_accepted_move_without_done_times_out(self):
+        client, _ = self.make_client(b"OK MOVING Q1=1 Q2=90\n")
+        with client:
+            with self.assertRaises(SerialResponseTimeout):
+                client.move(1, 2)
+
+    def test_firmware_error_and_stop_fail_the_move(self):
+        for response in (b"ERR unreachable\n", b"OK MOVING\nEVENT STOPPED set_pose_again\n"):
+            with self.subTest(response=response):
+                client, _ = self.make_client(response)
+                with client:
+                    with self.assertRaises(SerialCommunicationError):
+                        client.move(1, 2)
+
+    def test_done_event_without_move_acceptance_is_rejected(self):
+        client, _ = self.make_client(b"EVENT DONE\n")
+        with client:
+            with self.assertRaises(SerialProtocolError):
+                client.move(1, 2)
+
+    def test_home_uses_declared_pose_command(self):
+        client, fake = self.make_client(b"OK MOVING Q1=0 Q2=90\nEVENT DONE\n")
+        with client:
+            self.assertEqual(client.home(), "EVENT DONE")
+        self.assertEqual(fake.commands, [b"HOME\n"])
+
     def test_unexpected_response_is_a_protocol_error(self):
         client, _ = self.make_client(b"BUSY\n")
         with client:

@@ -5,10 +5,20 @@ the standalone instrument implementation remains in `oscilloscope/`.
 
 ## STM32 Serial
 
-`robot_serial.py` sends one newline-terminated `MOVE X Y` command and waits for
-a complete response line. `READY` acknowledges a successful move; `ERROR` and
-other responses fail the request. Configure `STM32_SERIAL_PORT`,
+The STM32 firmware and standalone motor tools live in [`../robot-arm/`](../robot-arm/README.md).
+`robot_serial.py` sends a newline-terminated `MOVE X Y` command and waits for
+`OK MOVING ...` followed by `EVENT DONE`, or immediate `OK DONE ...` if no pulses
+are needed. `ERR ...` and `EVENT STOPPED ...` fail the request. The acceptance
+reply alone never starts signal capture. Older firmware's standalone `READY`
+completion reply is also accepted. Configure `STM32_SERIAL_PORT`,
 `STM32_BAUD_RATE`, and `STM32_RESPONSE_TIMEOUT_SECONDS` in `backend/config.py`.
+
+Before an automatic job, configure the arm's measured lengths and pulse settings,
+physically place it in the known starting pose, then send `POSE 0 90` and `ARM`.
+The STM32 boots disarmed and the backend does not invent calibration values or
+automatically declare a physical pose. Close the standalone arrow controller
+before the backend opens the same serial port. XY coordinates are millimeters
+relative to the shoulder shaft. See the firmware README for the setup commands.
 
 Run a no-motion connection check with:
 
@@ -35,6 +45,7 @@ Outputs are stored under `oscilloscope/captures/<job_id>/<pin_label>/`.
 
 The local-only `POST /api/jobs/start` endpoint accepts a board ID and selected
 pin IDs. It validates all coordinates, verifies the oscilloscope, connects to
-the STM32, then processes each pin in order: move and await `READY`, capture
-and classify, return to `0,0` and await `READY`. A failure stops the sequence
+the STM32, then processes each pin in order: move and await completion, capture
+and classify, send `HOME` and await completion. `HOME` returns to the pose declared
+by `POSE`; XY `0,0` may be unreachable for a two-link arm. A failure stops the sequence
 for manual correction. Poll `GET /api/jobs/{job_id}` for progress and results.

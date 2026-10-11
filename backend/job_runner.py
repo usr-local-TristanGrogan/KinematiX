@@ -162,7 +162,7 @@ class ProbeJobManager:
                 if robot is not None:
                     stage = "returning home"
                     self._update(job_id, stage=stage, current_pin=current_pin)
-                    robot.move(0, 0)
+                    robot.home()
 
                 self._increment_completed(job_id)
                 current_pin = None

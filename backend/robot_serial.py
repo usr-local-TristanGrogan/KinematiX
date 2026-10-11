@@ -106,29 +106,49 @@ class STM32SerialClient:
         self.close()
 
     def move(self, x: float, y: float) -> str:
-        if self._connection is None:
-            raise SerialCommunicationError("STM32 serial client is not connected.")
         x_text = self._format_coordinate(x)
         y_text = self._format_coordinate(y)
-        command = f"MOVE {x_text} {y_text}\n"
+        return self._motion_command(f"MOVE {x_text} {y_text}")
+
+    def home(self) -> str:
+        """Return to the pose declared by POSE, without assuming XY 0,0 is reachable."""
+        return self._motion_command("HOME")
+
+    def _motion_command(self, command: str) -> str:
+        if self._connection is None:
+            raise SerialCommunicationError("STM32 serial client is not connected.")
+        data = (command + "\n").encode("ascii")
 
         try:
             self._connection.reset_input_buffer()
-            self._connection.write(command.encode("ascii"))
+            written = self._connection.write(data)
+            if written != len(data):
+                raise SerialCommunicationError("Incomplete STM32 command write.")
             self._connection.flush()
         except Exception as exc:
             raise SerialCommunicationError(f"Failed to send STM32 command: {exc}") from exc
 
-        response = self._read_response()
-        response_keyword = response.upper()
-        if response_keyword == "READY":
-            return response
-        if response_keyword == "ERROR" or response_keyword.startswith("ERROR "):
-            raise SerialCommunicationError(f"STM32 reported {response}.")
-        raise SerialProtocolError(f"Unexpected STM32 response: {response!r}.")
-
-    def _read_response(self) -> str:
         deadline = time.monotonic() + self.settings.response_timeout_seconds
+        moving = False
+        while True:
+            response = self._read_response(deadline)
+            keyword = response.upper()
+            if not keyword or keyword.startswith("READY "):
+                continue  # Ignore empty lines and the startup banner.
+            if keyword == "READY":
+                return response  # Compatibility with older firmware.
+            if keyword == "OK DONE" or keyword.startswith("OK DONE "):
+                return response  # A target requiring no pulses is already complete.
+            if keyword == "OK MOVING" or keyword.startswith("OK MOVING "):
+                moving = True
+                continue  # An accepted command has not yet finished moving.
+            if keyword == "EVENT DONE" and moving:
+                return response
+            if (keyword in ("ERR", "ERROR") or keyword.startswith(("ERR ", "ERROR ", "EVENT STOPPED"))):
+                raise SerialCommunicationError(f"STM32 reported {response}.")
+            raise SerialProtocolError(f"Unexpected STM32 response: {response!r}.")
+
+    def _read_response(self, deadline: float) -> str:
         response = bytearray()
         while time.monotonic() < deadline:
             remaining = deadline - time.monotonic()
@@ -149,7 +169,7 @@ class STM32SerialClient:
                 raise SerialProtocolError("STM32 response exceeded 256 bytes without a newline.")
 
         raise SerialResponseTimeout(
-            f"STM32 did not reply within {self.settings.response_timeout_seconds:g} seconds."
+            f"STM32 did not complete the command within {self.settings.response_timeout_seconds:g} seconds."
         )
 
     @staticmethod
