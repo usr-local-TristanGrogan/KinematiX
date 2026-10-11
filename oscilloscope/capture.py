@@ -383,29 +383,6 @@ def save_capture(raw, timestamps, volts, metadata, edges, thresholds, output_dir
         output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=False)
 
-    # Compact numerical archive. Includes the original ADC codes.
-    np.savez_compressed(
-        output_dir / "waveform.npz",
-        timestamps_s=timestamps,
-        voltage_v=volts,
-        raw_adc_codes=raw,
-    )
-
-    # Human-readable waveform.
-    with open(
-        output_dir / "waveform.csv", "w", newline=""
-    ) as file:
-        writer = csv.writer(file)
-        writer.writerow(["time_s", "voltage_v", "raw_adc_code"])
-        writer.writerows(
-            (
-                f"{timestamp:.7f}",
-                f"{voltage:.7f}",
-                int(adc_code),
-            )
-            for timestamp, voltage, adc_code in zip(timestamps, volts, raw)
-        )
-
     # Edge list; no bit or protocol interpretation.
     edge_fields = [
         "time_s", "from_level", "to_level",
@@ -450,8 +427,6 @@ def save_capture(raw, timestamps, volts, metadata, edges, thresholds, output_dir
     metadata["voltage_mean"] = float(np.mean(volts))
     metadata["edge_count"] = len(edges)
     metadata["edge_thresholds"] = thresholds
-    metadata["csv_time_decimal_places"] = 7
-
     with open(output_dir / "metadata.json", "w") as file:
         json.dump(metadata, file, indent=2)
 
@@ -491,8 +466,6 @@ def capture_once(
         )
         return {
             "output_dir": str(output_dir.resolve()),
-            "waveform_npz": str((output_dir / "waveform.npz").resolve()),
-            "waveform_csv": str((output_dir / "waveform.csv").resolve()),
             "edges_csv": str((output_dir / "edges.csv").resolve()),
             "metadata_json": str((output_dir / "metadata.json").resolve()),
             "sample_count": int(len(raw)),

@@ -3,9 +3,10 @@ import json
 from pathlib import Path
 
 if __package__:
-    from . import PWM, UART_9600, UART_115200
+    from . import CAN, PWM, UART_9600, UART_115200
     from .edge_utils import read_edges
 else:
+    import CAN
     import PWM
     import UART_9600
     import UART_115200
@@ -35,12 +36,25 @@ def analyze(edge_file):
         UART_9600.detect(edges),
         UART_115200.detect(edges),
         PWM.detect(edges),
+        CAN.detect(edges),
     ]
-    candidates.sort(key=lambda result: result["score"], reverse=True)
+    def is_validated_can(candidate):
+        return (
+            candidate["protocol"].startswith("CAN ")
+            and candidate["evidence"].get("valid_frames", 0) >= 2
+        )
+
+    candidates.sort(
+        key=lambda result: (result["score"], is_validated_can(result)),
+        reverse=True,
+    )
 
     best_score = candidates[0]["score"] if candidates else 0.0
     second_score = candidates[1]["score"] if len(candidates) > 1 else 0.0
-    if best_score < MINIMUM_SCORE:
+    validated_can = next((candidate for candidate in candidates if is_validated_can(candidate)), None)
+    if validated_can is not None:
+        classification = validated_can["protocol"]
+    elif best_score < MINIMUM_SCORE:
         classification = "unknown"
     elif best_score - second_score <= AMBIGUITY_MARGIN:
         classification = "ambiguous"
@@ -51,7 +65,10 @@ def analyze(edge_file):
         "input_file": str(edge_file),
         "edge_count": len(edges),
         "classification": classification,
-        "score_note": "Heuristic evidence scores, not calibrated probabilities.",
+        "score_note": (
+            "Heuristic evidence scores, not calibrated probabilities. "
+            "Two or more CRC-valid CAN frames take precedence over heuristic UART matches."
+        ),
         "candidates": candidates,
     }
 
