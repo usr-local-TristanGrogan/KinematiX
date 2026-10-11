@@ -1,4 +1,7 @@
-from edge_utils import detect_uart
+if __package__:
+	from .edge_utils import detect_uart
+else:
+	from edge_utils import detect_uart
 
 
 BAUD_RATE = 9600

@@ -10,6 +10,10 @@ const SIBLINGS = { double_row_even: "double_row_odd", double_row_odd: "double_ro
 const $ = (id) => document.getElementById(id);
 const canvas = $("canvas"), ctx = canvas.getContext("2d");
 const viewport = $("viewport"), stage = $("stage");
+const probeJob = {
+  id: null, running: false, manualMode: false, stage: null,
+  hasRun: false, requestedPins: [], lastResult: null, pollTimer: null,
+};
 
 const state = {
   image: null,           // ImageBitmap/HTMLImageElement of the analysed photo
@@ -75,7 +79,7 @@ function showResult(data, image, source) {
 
 // ---------------------------------------------------------------- phone link
 
-const phone = { ws: null, connected: false, retryMs: 500, urls: [] };
+const phone = { ws: null, connected: false, retryMs: 500, urls: [], qrExpanded: true };
 
 async function loadSession() {
   try {
@@ -102,12 +106,22 @@ function showQr() {
   const u = phone.urls.find((x) => x.ip === $("phone-net").value) || phone.urls[0];
   if (!u) {
     $("phone-qr").hidden = true;
+    $("phone-show-qr").hidden = true;
     $("phone-url").textContent = "No network. Turn on the phone's Personal Hotspot, connect it by USB, then press REFRESH.";
     return;
   }
   $("phone-qr").src = `/api/qr.svg?ip=${encodeURIComponent(u.ip)}&t=${Date.now()}`;
-  $("phone-qr").hidden = phone.connected;
   $("phone-url").textContent = u.url;
+  syncQrVisibility();
+}
+
+function syncQrVisibility() {
+  const hasUrl = phone.urls.length > 0;
+  const visible = hasUrl && phone.qrExpanded && !phone.connected;
+  $("phone-qr").hidden = !visible;
+  $("phone-show-qr").hidden = !hasUrl;
+  $("phone-show-qr").textContent = phone.qrExpanded ? "HIDE QR" : "SHOW QR";
+  $("phone-show-qr").setAttribute("aria-expanded", String(visible));
 }
 
 function setPhoneStatus(connected, devices = []) {
@@ -119,8 +133,7 @@ function setPhoneStatus(connected, devices = []) {
     ? `Phone connected${devices.length > 1 ? ` (${devices.length})` : ""}. Take a photo on the phone, or press REQUEST PHOTO.`
     : "Scan with the phone's Camera app to connect.";
   $("phone-request").disabled = !connected;
-  $("phone-qr").hidden = connected || !phone.urls.length;
-  $("phone-show-qr").hidden = !connected;
+  syncQrVisibility();
   if (changed) log(connected ? "Phone connected." : "Phone disconnected - it will reconnect automatically when the page is reopened.");
 }
 
@@ -295,9 +308,276 @@ function renderTable() {
     tbody.appendChild(tr);
   });
   $("sel-info").textContent = state.selected.size ? `· ${state.selected.size} SELECTED` : "";
+  updateProbeControls();
+}
+
+function updateProbeControls() {
+  const button = $("probe-start");
+  const manualReady = $("manual-ready");
+  const awaitingManualPosition =
+    probeJob.running && probeJob.manualMode && probeJob.stage === "manual_positioning";
+  button.disabled = probeJob.running || !state.result || state.selected.size === 0;
+  button.textContent = probeJob.running ? "JOB RUNNING" : probeJob.hasRun ? "RETRY PROBE" : "PROBE SELECTED";
+  $("manual-mode").disabled = probeJob.running;
+  manualReady.hidden = !awaitingManualPosition;
+  manualReady.disabled = !awaitingManualPosition;
+}
+
+function showJobStatus(job) {
+  probeJob.stage = job.stage;
+  const current = job.current_pin;
+  const progress = `${job.completed_pins}/${job.total_pins}`;
+  if (job.status === "failed") {
+    $("manual-ready").hidden = true;
+    const pin = current ? ` at ${current.label}` : " during preflight";
+    const stage = job.failed_stage ? ` (${job.failed_stage})` : "";
+    $("job-status").textContent = `FAILED${pin}${stage}: ${job.error}`;
+    log(`Probe job failed${pin}${stage}: ${job.error}`, true);
+    showResults(job);
+    return;
+  }
+  if (job.status === "complete") {
+    $("manual-ready").hidden = true;
+    const results = (job.results || []).map((result) => {
+      const protocol = result.capture?.protocol_detection?.classification || "unknown";
+      return `${result.label}: ${protocol}`;
+    });
+    const summary = results.length ? ` · ${results.join(" · ")}` : "";
+    $("job-status").textContent = `COMPLETE · ${progress} PINS${summary}`;
+    log(`Probe job complete · ${progress} pins`);
+    showResults(job);
+    return;
+  }
+  if (job.manual_mode && job.stage === "manual_positioning" && current) {
+    $("job-status").textContent = `Position the probe on ${current.label}, then start the read and hold steady until it completes. · ${progress} PINS`;
+    updateProbeControls();
+    log(`Manual probe · position on ${current.label} · ${progress} pins`);
+    return;
+  }
+  if (job.manual_mode && job.stage === "capturing signal" && current) {
+    $("job-status").textContent = `Reading ${current.label} for about 2.5 seconds. Keep the probe steady. · ${progress} PINS`;
+    updateProbeControls();
+    log(`Manual probe · reading ${current.label}`);
+    return;
+  }
+  if (job.manual_mode && job.stage === "processing signal" && current) {
+    $("job-status").textContent = `Reading complete for ${current.label}. Processing capture; this may take 30–45 seconds. · ${progress} PINS`;
+    updateProbeControls();
+    log(`Manual probe · reading complete for ${current.label}; processing capture`);
+    return;
+  }
+  const activePin = current ? `${current.label} · ` : "";
+  $("job-status").textContent = `${activePin}${job.stage.toUpperCase()} · ${progress} PINS`;
+  log(`Probe job · ${activePin}${job.stage} · ${progress} pins`);
+  updateProbeControls();
+}
+
+function pinReportData(pin, job) {
+  const capture = (job.results || []).find((result) => result.pin_id === pin.pin_id)?.capture;
+  if (capture?.protocol_detection) {
+    const detection = capture.protocol_detection;
+    const classification = detection.classification || "unknown";
+    const candidates = detection.candidates || [];
+    const candidate = candidates.find((item) => item.protocol === classification) || candidates[0];
+    const unknown = ["unknown", "ambiguous"].includes(classification.toLowerCase());
+    const additional = candidate || { score_note: detection.score_note, candidates };
+    const decodedText = /^UART\b/i.test(classification)
+      ? decodeUartPreview(candidate?.evidence?.decoded_bytes_preview)
+      : null;
+    if (job.status === "failed" && job.current_pin?.pin_id === pin.pin_id) {
+      additional.job_failure = { failed_stage: job.failed_stage, error: job.error };
+    }
+    return {
+      status: unknown ? "Unknown" : "Success",
+      protocol: unknown ? classification[0].toUpperCase() + classification.slice(1) : classification,
+      additional,
+      decodedText,
+    };
+  }
+
+  const isFailedPin = job.current_pin?.pin_id === pin.pin_id;
+  const failedBeforePin = job.status === "failed" && !job.current_pin;
+  return {
+    status: "Fail",
+    protocol: "Not detected",
+    additional: isFailedPin || failedBeforePin
+      ? { failed_stage: job.failed_stage, error: job.error }
+      : { error: "Not captured because the job stopped before reaching this pin." },
+  };
+}
+
+function decodeUartPreview(bytes) {
+  if (!Array.isArray(bytes)) return "No decoded bytes in the report.";
+  const decoded = new TextDecoder().decode(Uint8Array.from(bytes));
+  return decoded
+    .replace(/\r\n?/g, "\n")
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g,
+      (character) => `\\x${character.charCodeAt(0).toString(16).padStart(2, "0")}`);
+}
+
+function showResults(job) {
+  probeJob.lastResult = job;
+  const list = $("results-list");
+  list.replaceChildren();
+  const pins = probeJob.requestedPins.length
+    ? probeJob.requestedPins
+    : (job.results || []).map(({ pin_id, label }) => ({ pin_id, label }));
+
+  for (const pin of pins) {
+    const report = pinReportData(pin, job);
+    const item = document.createElement("article");
+    item.className = `result-item result-${report.status.toLowerCase()}`;
+
+    const heading = document.createElement("div");
+    heading.className = "result-heading";
+    const title = document.createElement("h3");
+    title.textContent = `Pin ${pin.label} (${pin.pin_id})`;
+    const status = document.createElement("strong");
+    status.className = "result-status";
+    status.textContent = report.status;
+    heading.append(title, status);
+
+    const protocol = document.createElement("p");
+    protocol.className = "result-protocol";
+    protocol.textContent = `Detected Protocol: ${report.protocol}`;
+    item.append(heading, protocol);
+    if (report.decodedText !== null) {
+      const decodedLabel = document.createElement("div");
+      decodedLabel.className = "result-data-label";
+      decodedLabel.textContent = "Decoded UART Text Preview";
+      const decoded = document.createElement("pre");
+      decoded.className = "result-decoded-text";
+      decoded.textContent = report.decodedText;
+      item.append(decodedLabel, decoded);
+    }
+    const dataLabel = document.createElement("div");
+    dataLabel.className = "result-data-label";
+    dataLabel.textContent = "Additional Data";
+    const data = document.createElement("pre");
+    data.textContent = JSON.stringify(report.additional, null, 2);
+    item.append(dataLabel, data);
+    list.append(item);
+  }
+
+  const progress = `${job.completed_pins}/${job.total_pins} pins`;
+  const failure = job.status === "failed" ? ` · ${job.failed_stage}: ${job.error}` : "";
+  $("results-summary").textContent = `${job.status.toUpperCase()} · ${progress}${failure}`;
+  if (!$("results-dialog").open) $("results-dialog").showModal();
+}
+
+function downloadMarkdownReport() {
+  if (!probeJob.lastResult) return;
+  const job = probeJob.lastResult;
+  const pins = probeJob.requestedPins.length
+    ? probeJob.requestedPins
+    : (job.results || []).map(({ pin_id, label }) => ({ pin_id, label }));
+  const sections = pins.map((pin) => {
+    const report = pinReportData(pin, job);
+    return [
+      `## Pin ${pin.label} (${pin.pin_id})`,
+      `Result: ${report.status}`,
+      `Detected Protocol: ${report.protocol}`,
+      ...(report.decodedText === null ? [] : [`Decoded Text Preview: ${JSON.stringify(report.decodedText)}`]),
+      "Additional Data:",
+      "```json",
+      JSON.stringify(report.additional, null, 2),
+      "```",
+    ].join("\n");
+  });
+  const blob = new Blob([sections.join("\n\n")], { type: "text/markdown;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `probe-report-${job.job_id.slice(0, 8)}.md`;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+async function pollProbeJob() {
+  if (!probeJob.id) return;
+  try {
+    const res = await fetch(`/api/jobs/${encodeURIComponent(probeJob.id)}`, { cache: "no-store" });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || res.statusText);
+    showJobStatus(data);
+    if (data.status === "queued" || data.status === "running") {
+      probeJob.pollTimer = setTimeout(pollProbeJob, 1000);
+      return;
+    }
+    probeJob.running = false;
+    probeJob.id = null;
+    probeJob.stage = null;
+    probeJob.hasRun = true;
+    updateProbeControls();
+  } catch (e) {
+    $("job-status").textContent = `STATUS CHECK FAILED: ${e.message}`;
+    log(`Could not read probe job status: ${e.message}`, true);
+    probeJob.pollTimer = setTimeout(pollProbeJob, 2000);
+  }
+}
+
+async function startProbeJob() {
+  if (probeJob.running || !state.result || !state.selected.size) return;
+  const selectedPins = [...state.selected].map((index) => state.result.pins[index]);
+  if (selectedPins.some((pin) => !pin.pin_id)) {
+    log("This pin result is missing backend pin IDs. Upload or detect the photo again.", true);
+    return;
+  }
+
+  probeJob.running = true;
+  probeJob.requestedPins = selectedPins.map(({ pin_id, label }) => ({ pin_id, label }));
+  $("job-status").textContent = "STARTING JOB…";
+  updateProbeControls();
+  try {
+    const res = await fetch("/api/jobs/start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        board: state.result.board,
+        pin_ids: selectedPins.map((pin) => pin.pin_id),
+        manual_mode: $("manual-mode").checked,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || res.statusText);
+    probeJob.id = data.job_id;
+    probeJob.manualMode = data.manual_mode;
+    probeJob.lastResult = null;
+    showJobStatus(data);
+    pollProbeJob();
+  } catch (e) {
+    probeJob.running = false;
+    probeJob.manualMode = false;
+    probeJob.stage = null;
+    $("manual-ready").hidden = true;
+    $("job-status").textContent = `COULD NOT START: ${e.message}`;
+    updateProbeControls();
+    log(`Could not start probe job: ${e.message}`, true);
+  }
+}
+
+async function confirmManualPosition() {
+  if (!probeJob.id || !probeJob.manualMode || probeJob.stage !== "manual_positioning") return;
+  $("manual-ready").disabled = true;
+  $("job-status").textContent = "Starting scope capture…";
+  try {
+    const res = await fetch(`/api/jobs/${encodeURIComponent(probeJob.id)}/ready`, {
+      method: "POST",
+      cache: "no-store",
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || res.statusText);
+    showJobStatus(data);
+    pollProbeJob();
+  } catch (e) {
+    $("manual-ready").disabled = false;
+    $("job-status").textContent = `Could not start capture: ${e.message}`;
+    log(`Could not confirm probe position: ${e.message}`, true);
+  }
 }
 
 function toggleSelect(i, additive) {
+  probeJob.hasRun = false;
   if (!additive) {
     const only = state.selected.size === 1 && state.selected.has(i);
     state.selected.clear();
@@ -312,6 +592,7 @@ function toggleSelect(i, additive) {
 }
 
 function applyFilter() {
+  probeJob.hasRun = false;
   const q = $("filter").value.trim().toUpperCase();
   state.selected.clear();
   if (q && state.result) {
@@ -416,8 +697,18 @@ window.addEventListener("mousemove", (ev) => {
 // ---------------------------------------------------------------- wiring
 
 $("phone-request").onclick = requestPhonePhoto;
+$("probe-start").onclick = startProbeJob;
+$("manual-ready").onclick = confirmManualPosition;
+$("results-close").onclick = () => $("results-dialog").close();
+$("results-download").onclick = downloadMarkdownReport;
+$("results-dialog").addEventListener("click", (event) => {
+  if (event.target === $("results-dialog")) $("results-dialog").close();
+});
 $("phone-net").onchange = showQr;
-$("phone-show-qr").onclick = () => { $("phone-qr").hidden = !$("phone-qr").hidden; };
+$("phone-show-qr").onclick = () => {
+  phone.qrExpanded = !phone.qrExpanded;
+  syncQrVisibility();
+};
 $("phone-refresh").onclick = loadSession;
 $("upload").onchange = (e) => { if (e.target.files[0]) upload(e.target.files[0]); e.target.value = ""; };
 ["show-boxes", "show-labels", "show-outline"].forEach((id) => ($(id).onchange = draw));

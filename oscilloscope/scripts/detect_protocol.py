@@ -2,10 +2,14 @@ import argparse
 import json
 from pathlib import Path
 
-import PWM
-import UART_9600
-import UART_115200
-from edge_utils import read_edges
+if __package__:
+    from . import PWM, UART_9600, UART_115200
+    from .edge_utils import read_edges
+else:
+    import PWM
+    import UART_9600
+    import UART_115200
+    from edge_utils import read_edges
 
 
 MINIMUM_SCORE = 0.5

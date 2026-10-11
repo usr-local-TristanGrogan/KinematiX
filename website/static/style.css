@@ -158,3 +158,50 @@ tbody tr.selected { background: rgba(242, 183, 5, 0.15); outline: 1px solid var(
   font: 11px var(--mono); color: var(--muted); letter-spacing: 0.05em;
 }
 .statusbar.error { color: var(--err); }
+
+/* Probe results */
+.results-dialog {
+  width: min(1000px, calc(100vw - 32px));
+  max-width: calc(100vw - 32px);
+  max-height: min(88vh, 900px);
+  margin: auto;
+  padding: 0;
+  overflow: hidden;
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-top: 3px solid var(--accent);
+}
+.results-dialog::backdrop { background: rgba(0, 0, 0, 0.78); }
+.results-shell { display: flex; flex-direction: column; max-height: min(88vh, 900px); }
+.results-header, .results-footer {
+  display: flex; align-items: center; justify-content: space-between; gap: 20px;
+  padding: 20px 24px; background: var(--panel);
+}
+.results-header { border-bottom: 1px solid var(--line); }
+.results-header h2 { margin: 4px 0; font-size: 26px; font-weight: 600; }
+.results-header p { margin: 0; color: var(--muted); font: 13px var(--mono); }
+.results-list { min-height: 0; overflow: auto; padding: 0 24px; }
+.result-item { padding: 20px 0; border-bottom: 1px solid var(--line); }
+.result-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; }
+.result-heading h3 { margin: 0; font-size: 20px; font-weight: 600; }
+.result-status { font: 600 14px var(--mono); text-transform: uppercase; }
+.result-success .result-status { color: var(--ok); }
+.result-unknown .result-status { color: var(--accent); }
+.result-fail .result-status { color: var(--err); }
+.result-protocol { margin: 10px 0 14px; font-size: 17px; }
+.result-data-label { margin-bottom: 6px; color: var(--muted); font: 600 12px var(--mono); text-transform: uppercase; }
+.result-item pre {
+  margin: 0; padding: 14px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere;
+  background: var(--bg); border: 1px solid var(--line); color: var(--text);
+  font: 13px/1.5 var(--mono);
+}
+.results-footer { border-top: 1px solid var(--line); }
+.results-footer > span { color: var(--muted); font-size: 12px; }
+@media (max-width: 600px) {
+  .results-header, .results-footer { align-items: stretch; flex-direction: column; padding: 16px; }
+  .results-header { flex-direction: row; align-items: flex-start; }
+  .results-list { padding: 0 16px; }
+  .result-heading h3 { font-size: 17px; }
+  .result-protocol { font-size: 15px; }
+}

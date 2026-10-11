@@ -4,15 +4,15 @@ import json
 import time
 from pathlib import Path
 from datetime import datetime, timezone
+from typing import Callable
 
 import numpy as np
-import pyvisa
 
 
 # ---------------- Configuration ----------------
 
 CHANNEL = "CHAN3"
-OUTPUT_ROOT = Path("captures")
+OUTPUT_ROOT = Path(__file__).resolve().parent / "captures"
 CAPTURE_DURATION_SECONDS = 2.4
 HORIZONTAL_SCALE_SECONDS_PER_DIV = 0.1
 ACQUISITION_MEMORY_DEPTH = "24M"
@@ -29,36 +29,73 @@ WAVEFORM_BLOCK_RETRY_DELAY_SECONDS = 0.25
 # LAN:   TCPIP0::192.168.1.100::INSTR
 VISA_RESOURCE = None
 
-# Fixed hysteresis thresholds for the captured 0-5 V UART signal.
-# Adjust these if the interface uses different logic levels.
-EDGE_LOW_THRESHOLD_VOLTS = 1.5
-EDGE_HIGH_THRESHOLD_VOLTS = 3.5
+# Fixed hysteresis thresholds for a 3.3 V logic signal (about 30% / 70% VDD).
+EDGE_LOW_THRESHOLD_VOLTS = 1.0
+EDGE_HIGH_THRESHOLD_VOLTS = 2.3
 
 
 # ---------------- Instrument connection ----------------
 
-def connect_scope():
+def available_scope_resources():
+    try:
+        import pyvisa
+    except ImportError as exc:
+        raise RuntimeError("PyVISA is not installed. Install the backend requirements.") from exc
+
     rm = pyvisa.ResourceManager()
-
-    if VISA_RESOURCE:
-        return rm, rm.open_resource(VISA_RESOURCE)
-
-    resources = rm.list_resources()
-
+    try:
+        resources = tuple(rm.list_resources())
+    finally:
+        rm.close()
     if not resources:
         raise RuntimeError(
-            "No VISA instruments found. Check the USB/LAN "
-            "connection and VISA installation."
+            "No VISA instruments found. Check the USB/LAN connection and VISA installation."
         )
+    return resources
 
-    print("Available VISA resources:")
-    for i, resource in enumerate(resources):
-        print(f"  {i}: {resource}")
 
-    selection = int(input("Select your RIGOL resource number: "))
-    scope = rm.open_resource(resources[selection])
+def connect_scope(resource_index=0, resource_name=None):
+    try:
+        import pyvisa
+    except ImportError as exc:
+        raise RuntimeError("PyVISA is not installed. Install the backend requirements.") from exc
 
+    rm = pyvisa.ResourceManager()
+    try:
+        resources = tuple(rm.list_resources())
+        if not resources:
+            raise RuntimeError(
+                "No VISA instruments found. Check the USB/LAN connection and VISA installation."
+            )
+        if resource_name is not None:
+            if resource_name not in resources:
+                raise RuntimeError(f"Configured VISA resource is not available: {resource_name}")
+            selected_resource = resource_name
+        else:
+            if not isinstance(resource_index, int) or not 0 <= resource_index < len(resources):
+                raise RuntimeError(
+                    f"VISA resource index {resource_index!r} is unavailable; "
+                    f"found {len(resources)} resource(s)."
+                )
+            selected_resource = resources[resource_index]
+        scope = rm.open_resource(selected_resource)
+    except Exception:
+        rm.close()
+        raise
     return rm, scope
+
+
+def check_scope_identity(resource_index=0, resource_name=None):
+    """Open the selected VISA instrument, verify its identity, then close it."""
+    rm, scope = connect_scope(resource_index, resource_name)
+    try:
+        instrument_id = scope.query("*IDN?").strip()
+        if not instrument_id:
+            raise RuntimeError("The selected VISA resource did not return an instrument ID.")
+        return instrument_id
+    finally:
+        scope.close()
+        rm.close()
 
 
 def query_optional(scope, command):
@@ -116,7 +153,7 @@ def wait_for_full_record_preamble(scope):
 
 # ---------------- Waveform acquisition ----------------
 
-def acquire_waveform(scope):
+def acquire_waveform(scope, on_acquisition_complete=None):
     scope.write(":STOP")
     scope.write(f":ACQ:MDEP {ACQUISITION_MEMORY_DEPTH}")
     scope.write(f":WAV:SOUR {CHANNEL}")
@@ -128,6 +165,8 @@ def acquire_waveform(scope):
     scope.write(f":TIM:SCAL {HORIZONTAL_SCALE_SECONDS_PER_DIV}")
     scope.write(":SING")
     wait_for_single_acquisition(scope)
+    if on_acquisition_complete is not None:
+        on_acquisition_complete()
 
     # Preamble fields:
     # format, type, points, count, xinc, xorig, xref,
@@ -336,9 +375,12 @@ def extract_edges(timestamps, volts):
 
 # ---------------- File export ----------------
 
-def save_capture(raw, timestamps, volts, metadata, edges, thresholds):
-    capture_name = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_dir = OUTPUT_ROOT / capture_name
+def save_capture(raw, timestamps, volts, metadata, edges, thresholds, output_dir=None):
+    if output_dir is None:
+        capture_name = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_dir = OUTPUT_ROOT / capture_name
+    else:
+        output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=False)
 
     # Compact numerical archive. Includes the original ADC codes.
@@ -416,36 +458,70 @@ def save_capture(raw, timestamps, volts, metadata, edges, thresholds):
     return output_dir
 
 
-# ---------------- Main ----------------
-
-def main():
-    rm, scope = connect_scope()
+def capture_once(
+    output_dir=None,
+    resource_index=0,
+    resource_name=None,
+    extra_metadata=None,
+    on_acquisition_complete: Callable[[], None] | None = None,
+):
+    """Acquire one waveform and save its raw data and extracted edges."""
+    rm, scope = connect_scope(resource_index, resource_name)
 
     try:
         scope.timeout = 30000
         scope.chunk_size = 1024 * 1024
 
-        print("\nConnected to:", scope.query("*IDN?").strip())
-        print("Channel:", CHANNEL)
-        print("Prepare the signal and trigger on the scope.")
-        input("Press Enter to arm the single 24M-point acquisition...")
+        instrument_id = scope.query("*IDN?").strip()
+        if not instrument_id:
+            raise RuntimeError("The selected VISA resource did not return an instrument ID.")
 
-        raw, timestamps, volts, metadata = acquire_waveform(scope)
+        raw, timestamps, volts, metadata = acquire_waveform(
+            scope,
+            on_acquisition_complete=on_acquisition_complete,
+        )
+        metadata["instrument_id"] = instrument_id
+        if extra_metadata:
+            metadata.update(extra_metadata)
 
         edges, thresholds = extract_edges(timestamps, volts)
 
         output_dir = save_capture(
-            raw, timestamps, volts, metadata, edges, thresholds
+            raw, timestamps, volts, metadata, edges, thresholds, output_dir
         )
-
-        print(f"\nCapture saved to: {output_dir.resolve()}")
-        print(f"Samples: {len(raw)}")
-        print(f"Transitions detected: {len(edges)}")
-        print("No protocol decoding was performed.")
+        return {
+            "output_dir": str(output_dir.resolve()),
+            "waveform_npz": str((output_dir / "waveform.npz").resolve()),
+            "waveform_csv": str((output_dir / "waveform.csv").resolve()),
+            "edges_csv": str((output_dir / "edges.csv").resolve()),
+            "metadata_json": str((output_dir / "metadata.json").resolve()),
+            "sample_count": int(len(raw)),
+            "edge_count": len(edges),
+        }
 
     finally:
         scope.close()
         rm.close()
+
+
+# ---------------- Main ----------------
+
+def main():
+    resources = available_scope_resources()
+    print("Available VISA resources:")
+    for index, resource in enumerate(resources):
+        print(f"  {index}: {resource}")
+    selection = int(input("Select your RIGOL resource number: "))
+    if not 0 <= selection < len(resources):
+        raise SystemExit(f"VISA resource index {selection} is unavailable.")
+    print("Prepare the signal and trigger on the scope.")
+    input("Press Enter to arm the single 24M-point acquisition...")
+
+    result = capture_once(resource_name=resources[selection])
+    print(f"\nCapture saved to: {result['output_dir']}")
+    print(f"Samples: {result['sample_count']}")
+    print(f"Transitions detected: {result['edge_count']}")
+    print("No protocol decoding was performed.")
 
 
 if __name__ == "__main__":
