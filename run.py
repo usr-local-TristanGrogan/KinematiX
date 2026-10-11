@@ -22,7 +22,8 @@ from pathlib import Path
 MIN_PY = (3, 10)
 ROOT = Path(__file__).resolve().parent
 VENV = ROOT / ".venv"
-REQS = [ROOT / "website" / "requirements.txt", ROOT / "computer-vision" / "requirements.txt"]
+REQS = [ROOT / "website" / "requirements.txt", ROOT / "computer-vision" / "requirements.txt",
+    ROOT / "backend" / "requirements.txt"]
 STAMP = VENV / ".requirements.sha256"
 
 

@@ -1,4 +1,5 @@
 -r ../computer-vision/requirements.txt
+-r ../backend/requirements.txt
 fastapi
 uvicorn[standard]
 python-multipart

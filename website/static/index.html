@@ -42,7 +42,7 @@
         <div class="phone-url" id="phone-url">Loading…</div>
         <div class="row buttons">
           <button id="phone-request" class="btn primary" disabled title="Prompt the phone to take a photo">REQUEST PHOTO</button>
-          <button id="phone-show-qr" class="btn" hidden>QR</button>
+          <button id="phone-show-qr" class="btn" aria-expanded="true">HIDE QR</button>
           <button id="phone-refresh" class="btn" title="Re-scan networks (e.g. after turning on the hotspot)">REFRESH</button>
         </div>
       </div>
@@ -62,6 +62,14 @@
         <label class="check"><input type="checkbox" id="show-outline" checked> BOARD OUTLINE</label>
       </div>
 
+      <div class="group">
+        <div class="group-title">PROBE JOB</div>
+        <label class="check"><input type="checkbox" id="manual-mode"> MANUAL PROBE · SKIP ROBOT</label>
+        <div class="phone-status" id="job-status">Select one or more pins to begin.</div>
+        <button id="manual-ready" class="btn" hidden>START 2.5S READ</button>
+        <button id="probe-start" class="btn primary" disabled>PROBE SELECTED</button>
+      </div>
+
       <div class="group grow">
         <div class="group-title">PINS <span class="muted" id="sel-info"></span></div>
         <input type="search" id="filter" placeholder="FILTER  e.g. D13, A, GND" autocomplete="off">
@@ -75,8 +83,26 @@
     </aside>
   </main>
 
+  <dialog id="results-dialog" class="results-dialog" aria-labelledby="results-title">
+    <div class="results-shell">
+      <header class="results-header">
+        <div>
+          <div class="group-title">PROBE JOB RESULTS</div>
+          <h2 id="results-title">Signal report</h2>
+          <p id="results-summary"></p>
+        </div>
+        <button id="results-close" class="btn" type="button">CLOSE</button>
+      </header>
+      <div id="results-list" class="results-list"></div>
+      <footer class="results-footer">
+        <span>Candidate evidence is heuristic, not a calibrated probability.</span>
+        <button id="results-download" class="btn primary" type="button">DOWNLOAD MARKDOWN</button>
+      </footer>
+    </div>
+  </dialog>
+
   <footer class="statusbar" title=""><span id="log">READY</span></footer>
 
-  <script src="app.js"></script>
+  <script src="app.js?v=uart-text-1"></script>
 </body>
 </html>

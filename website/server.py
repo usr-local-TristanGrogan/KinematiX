@@ -28,10 +28,15 @@ from fastapi import FastAPI, File, HTTPException, Request, UploadFile, WebSocket
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
 ROOT = Path(__file__).resolve().parent
+sys.path.insert(0, str(ROOT.parent))
 sys.path.insert(0, str(ROOT.parent / "computer-vision"))
 import pin_finder as pf  # noqa: E402
+from backend.job_runner import JobBusyError, ManualJobStateError, probe_jobs  # noqa: E402
+from backend.pin_coordinates import PinCoordinateMapError  # noqa: E402
+from backend.robot_serial import SerialConfigurationError  # noqa: E402
 
 app = FastAPI(title="Pin Finder")
 
@@ -42,6 +47,12 @@ HINT = ("Make sure the image is in focus (tap the board to focus) and the whole 
 PORT = 8000
 # One pairing code per server run; phones must present it. Rescan after a restart.
 SESSION_CODE = secrets.token_urlsafe(6)
+
+
+class StartJobRequest(BaseModel):
+    board: str
+    pin_ids: list[str]
+    manual_mode: bool = False
 
 
 # --------------------------------------------------------------------------
@@ -77,7 +88,10 @@ def run_detection(data: bytes, board: str):
         "detect_ms": round(ms, 1),
         "detected": n_det,
         "board_corners": dbg["corners"].tolist(),
-        "pins": [asdict(p) for p in pins],
+        "pins": [
+            {"pin_id": f"pin_{index:03d}", **asdict(pin)}
+            for index, pin in enumerate(pins)
+        ],
     }
     return result, jpg.tobytes()
 
@@ -94,6 +108,53 @@ async def detect(image: UploadFile = File(...), board: str = "metro_grand_centra
     if return_image:
         result["image_jpeg"] = base64.b64encode(jpg).decode()
     return result
+
+
+@app.post("/api/jobs/start")
+def start_probe_job(request: Request, payload: StartJobRequest):
+    require_local(request)
+    if payload.board not in pf.BOARDS:
+        raise HTTPException(400, f"Unknown board '{payload.board}'")
+    template = pf.BOARDS[payload.board]["template"]()
+    pin_metadata = {}
+    for pin_id in payload.pin_ids:
+        try:
+            index = int(pin_id.removeprefix("pin_"))
+        except (AttributeError, ValueError) as exc:
+            raise HTTPException(400, f"Invalid pin ID {pin_id!r}.") from exc
+        if pin_id != f"pin_{index:03d}" or not 0 <= index < len(template):
+            raise HTTPException(400, f"Invalid pin ID {pin_id!r}.")
+        label, _, _, header = template[index]
+        pin_metadata[pin_id] = {"pin_id": pin_id, "label": label, "header": header}
+    try:
+        return probe_jobs.start(
+            payload.board,
+            payload.pin_ids,
+            manual_mode=payload.manual_mode,
+            pin_metadata=pin_metadata,
+        )
+    except JobBusyError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except (PinCoordinateMapError, SerialConfigurationError, ValueError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.get("/api/jobs/{job_id}")
+def probe_job_status(job_id: str, request: Request):
+    require_local(request)
+    job = probe_jobs.get(job_id)
+    if job is None:
+        raise HTTPException(404, "Probe job not found.")
+    return job
+
+
+@app.post("/api/jobs/{job_id}/ready")
+def confirm_manual_probe_position(job_id: str, request: Request):
+    require_local(request)
+    try:
+        return probe_jobs.confirm_manual_ready(job_id)
+    except ManualJobStateError as exc:
+        raise HTTPException(409, str(exc)) from exc
 
 
 # --------------------------------------------------------------------------
@@ -251,7 +312,8 @@ async def phone_upload(s: str, image: UploadFile = File(...), board: str = "metr
     await hub.send_all(hub.laptops, {"type": "detection_result", "image_id": hub.latest_id, "result": result})
     return {"detected": result["detected"], "total": len(result["pins"]), "detect_ms": result["detect_ms"],
             "width": result["width"], "height": result["height"],
-            "pins": [{"label": p["label"], "x": p["x"], "y": p["y"], "detected": p["detected"]}
+            "pins": [{"pin_id": p["pin_id"], "label": p["label"], "x": p["x"], "y": p["y"],
+                      "detected": p["detected"]}
                      for p in result["pins"]]}
 
 
